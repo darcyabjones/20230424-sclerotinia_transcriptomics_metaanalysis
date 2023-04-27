@@ -1,0 +1,9 @@
+^\.git/.*
+^backup/.*
+^\.prj
+^\.prjignore
+.*\.ipynb_checkpoints$
+^condaenv/*
+^venv/*
+^NOTES.txt
+work/.*

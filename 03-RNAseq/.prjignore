@@ -1,0 +1,13 @@
+^\.git/.*
+^backup/.*
+^\.prj
+^\.prjignore
+.*\.ipynb_checkpoints$
+^condaenv/*
+^venv/*
+^NOTES.txt
+work/.*
+input/sra_rnaseq\.tsv
+input/Sscl1980-nuclear\.fasta
+input/Sscl1980-mRNA\.gtf
+input/Sscl1980-cds\.fna

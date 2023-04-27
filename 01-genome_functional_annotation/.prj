@@ -1,0 +1,18 @@
+HEAD=
+CHANGELOG="CHANGELOG.txt"
+NOTEFILE="NOTES.txt"
+INPUTFILE="INPUTS.txt"
+PRJPROFILE="project"
+
+# Max size of each backup tar file in GB
+# Files bigger than this will be on their own :)
+MAXSIZE=4
+COMPRESSION="gzip"
+COMPRESSION_LEVEL="6"
+
+BACKUP_DIR="backup"
+INPUTDIR="input"
+OUTPUTDIR="output"
+WORKDIR="work"
+ENVDIR="envs"
+CODEDIR="code"

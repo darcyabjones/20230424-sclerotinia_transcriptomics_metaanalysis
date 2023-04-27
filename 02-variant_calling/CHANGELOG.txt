@@ -1,0 +1,5 @@
+## 20230424-134902
+
+Initialised project
+
+Variant calling from Illumina Resequencing analysis of Sclerotinia sclerotiorum

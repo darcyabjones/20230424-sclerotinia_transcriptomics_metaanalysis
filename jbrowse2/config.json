@@ -1,0 +1,33 @@
+{
+  "assemblies": [
+    {
+      "name": "Ss1980",
+      "sequence": {
+        "type": "ReferenceSequenceTrack",
+        "trackId": "Ss1980-ReferenceSequenceTrack",
+        "adapter": {
+          "type": "BgzipFastaAdapter",
+          "fastaLocation": {
+            "uri": "Sscl1980-nuclear.fasta.gz",
+            "locationType": "UriLocation"
+          },
+          "faiLocation": {
+            "uri": "Sscl1980-nuclear.fasta.gz.fai",
+            "locationType": "UriLocation"
+          },
+          "gziLocation": {
+            "uri": "Sscl1980-nuclear.fasta.gz.gzi",
+            "locationType": "UriLocation"
+          }
+        }
+      },
+      "displayName": "Sclerotinia sclerotiorum 1980"
+    }
+  ],
+  "configuration": {},
+  "connections": [],
+  "defaultSession": {
+    "name": "New Session"
+  },
+  "tracks": []
+}

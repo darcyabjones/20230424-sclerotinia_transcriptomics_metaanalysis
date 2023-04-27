@@ -1,0 +1,37 @@
+
+## Added input at 20230424-165559
+
+```
+cp ../input/sra_rnaseq.tsv input
+```
+
+Code has touched these files:
+- NEW: input/sra_rnaseq.tsv (sha256:b4560e5291cf4b3542dc4f3ae899a2efc0e09560cd7d11e548e64d943ded0c6c)
+
+## Added input at 20230424-165649
+
+```
+zcat ../input/reference_genome/Sscl1980-nuclear.fasta.gz > input/Sscl1980-nuclear.fasta
+samtools faidx input/Sscl1980-nuclear.fasta
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-nuclear.fasta (sha256:dbcc582d9ec239e2554bbe807edf89163c51da65ddd055fe08b3747c10a735ba)
+
+## Added input at 20230424-165700
+
+```
+zcat ../input/reference_genome/Sscl1980-mRNA.gtf.gz input/Sscl1980-mRNA.gtf
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-mRNA.gtf (sha256:b7fd91ed9b0623e76f87f22361a5dadd441cf83899ad0eb70c7d0c3a5ff747c1)
+
+## Added input at 20230425-171523
+
+```
+zcat ../input/reference_genome/Sscl1980-cds.fna.gz > input/Sscl1980-cds.fna
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-cds.fna (sha256:537070180c8f7603e13a6d1b3d13981a2df828bb2f4dffd74b176a5818af6355)

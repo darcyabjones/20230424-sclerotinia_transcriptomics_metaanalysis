@@ -1,0 +1,5 @@
+## 20230424-135009
+
+Initialised project
+
+small and micro RNAseq analysis of Sclerotinia sclerotiorum

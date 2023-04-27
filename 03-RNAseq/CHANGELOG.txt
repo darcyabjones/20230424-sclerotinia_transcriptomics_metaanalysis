@@ -1,0 +1,5 @@
+## 20230424-134613
+
+Initialised project
+
+RNAseq metaanalysis of Sclerotinia sclerotiorum

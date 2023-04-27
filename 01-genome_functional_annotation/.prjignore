@@ -1,0 +1,10 @@
+^\.git/.*
+^backup/.*
+^\.prj
+^\.prjignore
+.*\.ipynb_checkpoints$
+^condaenv/*
+^venv/*
+^NOTES.txt
+work/.*
+input/sra_rnaseq\.tsv

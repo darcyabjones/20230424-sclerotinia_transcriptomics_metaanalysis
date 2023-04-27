@@ -1,0 +1,25 @@
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - hisat2=2.2.1
+  - fastp=0.23.2
+  - falco
+  - multiqc=1.14
+  - samtools=1.17
+  - htslib=1.17
+  - bedtools
+  - ucsc-bedgraphtobigwig
+  - subread=2.0.3
+  - stringtie=2.2.1
+  - kallisto=0.44
+  - rseqc=5.0.1
+  - sra-tools=3.0.3
+  - ca-certificates
+  - certifi
+  - openssl
+  - ipython
+  - pip
+  - pip:
+    - git+https://github.com/darcyabjones/how_are_we_stranded_here.git
