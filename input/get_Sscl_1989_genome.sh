@@ -99,6 +99,7 @@ awk -F "\t" -v OFS="\t" -v IF="reference_genome/chr_map.tsv" '
     $0 ~ /^#/ {print}
     $3 == "region" {next}
     $3 ~ /transcript|exon|CDS/ {
+       $1=IDS[$1];
        tid=gensub(/^.*orig_transcript_id "gnl\|PRJNA348385\|mRNA\.([^",]+).*$/, "\\1", "g", $9); gid="gene-"tid;
        $9=gensub(/ transcript_id\s+"gnl\|PRJNA348385\|mRNA\.([^"]+)"/, " transcript_id \"\\1\"", "g", $9);
        $9=gensub(/gene_id\s+"[^"]+"/, "gene_id \""gid"\"", "g", $9);
