@@ -20,16 +20,18 @@ elif [ "${STRAND}" == "RF" ] || [ "${STRAND}" == "R" ]
 then
     STRANDFLAG="--rf"
 else
-    echo "Not prediting new transcripts as the data are unstranded" >&2
-    exit 0
+    STRANDFLAG=""
 fi
 
-mkdir -p "${OUTDIR}/stringtie_indiv"
+mkdir -p "${OUTDIR}/stringtie_quant"
+mkdir -p "${OUTDIR}/stringtie_ballgown/${SRA}"
 stringtie \
-    -o "${OUTDIR}/stringtie_indiv/${SRA}.gtf" \
+    -e \
+    -A "${OUTDIR}/stringtie_quant/${SRA}-gene_abund.tab" \
+    -b "${OUTDIR}/stringtie_ballgown/${SRA}" \
+    -o "${OUTDIR}/stringtie_quant/${SRA}.gtf" \
     -p "${NCPUS}" \
     -G "${GTF}" \
     ${STRANDFLAG} \
-    --conservative \
     --ref "${GENOME}" \
     "${CRAM}"

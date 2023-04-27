@@ -20,6 +20,8 @@ dependencies:
   - certifi
   - openssl
   - ipython
+  - gffread
+  - gffcompare
   - pip
   - pip:
     - git+https://github.com/darcyabjones/how_are_we_stranded_here.git

@@ -101,7 +101,7 @@ then
     STRAND="R"
 elif [[ "${STRANDOUT}" == 'Data is likely unstranded' ]]
 then
-    STRAND="unstranded"
+    STRAND="unstranded ${STRATEGY}"
 else
     echo "ERROR: could not determine strandedness" >&2
     cat "${TMPPREFIX}/check_strandedness.txt" >&2

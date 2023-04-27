@@ -1,0 +1,3 @@
+[submodule "03-RNAseq/code/slurm_scripts"]
+	path = 03-RNAseq/code/slurm_scripts
+	url = https://github.com/darcyabjones/slurm_scripts
