@@ -1,0 +1,346 @@
+---
+title: "Plotting VCF scores to find variant filtering thresholds."
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+This notebook automatically generates a report and sample command to hard filter GATK variants with.
+This is primarily intended to make bootstrapping pipelines easier.
+
+Normally you'd use the VQSR tools to make your final filtered set.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+suppressPackageStartupMessages({
+require(vcfR)
+require(tidyverse)
+require(gridExtra)
+require(GenomicRanges)
+})
+```
+
+
+```{r}
+## These are supposed to be modified before running.
+VCF <- "INSERT_VARIANT_FILE_HERE_PLEASE"
+BIALLELIC <- INSERT_BIALLELIC_ARG_HERE_PLEASE  # Boolean
+GENOME <- "INSERT_GENOME_FILE_HERE_PLEASE"
+GFF <- "INSERT_GFF_FILE_HERE_PLEASE"
+GENES_ONLY <- TRUE
+GENE_DIST_THRESHOLD <- INSERT_GENE_DIST_THRESHOLD_HERE_PLEASE  # Int
+```
+
+```{r}
+vcf <- read.vcfR(VCF)
+vcf
+```
+
+Here are the locus level statistics in the INFO field.
+
+```{r}
+grep("##INFO=", vcf@meta, value = TRUE)
+```
+
+Here are the genotype specific statistics in the genotype fields.
+
+```{r}
+grep("##FORMAT=", vcf@meta, value = TRUE)
+```
+
+Filter for biallelic if specified
+
+```{r}
+if (BIALLELIC) {
+  vcf <- vcf[is.biallelic(vcf),]
+}
+vcf
+```
+
+## Locus level stats
+
+Here i'll extract locus level statistics and compute the quantiles.
+
+```{r}
+INFO <- extract_info_tidy(vcf) %>% select(-END, -Key, -AC, -AF, -MLEAC, -MLEAF, -RAW_MQandDP)
+INFO[["QUAL"]] <- as.numeric(vcf@fix[,"QUAL"])
+
+SUMMARY <- t(rbind(apply(
+  INFO,
+  MARGIN = 2,
+  FUN = function(x) {c(
+    quantile(x, probs = c(0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0), na.rm = TRUE),
+    c("N" = sum(!is.na(x)))
+  )}
+)))
+SUMMARY
+```
+
+I'd suggest that these are useful for deciding filtering hard thresholds.
+E.g. the 1st, 10th, 90th, or 99th percentile for larger tails.
+
+`N` is the number of non-NA values in there.
+Consider this when deciding on thresholds.
+
+I don't really recommend filtering by QUAL except for removing exceptionally low scores.
+It's better to focus on the depth/qual (DQ) scores later.
+Were looking to select a **minimum** QUAL value threshold to keep. E.g. keep if QUAL > 15.
+Generally I find the QUAL thresholds are easier to see on a Log scale, so i'll plot both.
+Be very relaxed if filtering on this one.
+
+```{r}
+grid.arrange(
+  ggplot(INFO, aes(x=QUAL)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("QUAL"),
+  ggplot(INFO, aes(x=QUAL)) + geom_density(na.rm=TRUE, trim = TRUE) + scale_x_log10() + ggtitle("log10(QUAL)"),
+  ncol=2
+)
+```
+
+
+
+### GATK stats to filter by
+
+Now we're actually showing some things you should filter by.
+The "official" guide to this is here: https://gatk.broadinstitute.org/hc/en-us/articles/360035890471-Hard-filtering-germline-short-variants
+That document seems to migrate so google if you get a 404.
+
+
+
+Next I'll plot DP. With depth this is the number of reads supporting a variant call.
+We want to set a **minimum** number of reads so that we have high confidence, but we also want to remove values with really high DP as these are likely in repeats and we can't be confident about the alignments.
+I suggest deciding your minimum DP based on this value, and selecting your maximum DP based on the ChromoQC plots presented later (it's easier to see spikes in DP when you have the genomic context).
+
+```{r}
+grid.arrange(
+  ggplot(INFO, aes(x=DP)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("DP"),
+  ggplot(INFO, aes(x=DP)) + geom_density(na.rm=TRUE, trim = TRUE) + scale_x_log10() + ggtitle("log10(DP)"),
+  ncol=2
+)
+```
+
+
+GATK usually likes to suggest filtering by QD rather then QUAL or DP separately.
+I'd probably combine the two. Set DP thresholds based on the ChromoQC plots and set a conservative threshold of QD from this plot.
+Again, here we're looking to remove small values, but don't go super aggressive on this.
+GATK recommends a threshold of 2.
+
+```{r}
+grid.arrange(
+  ggplot(INFO, aes(x=QD)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("QD"),
+  ggplot(INFO, aes(x=QD)) + geom_density(na.rm=TRUE, trim = TRUE) + scale_x_log10() + ggtitle("log10(QD)"),
+  ncol=2
+)
+```
+
+The FS (FisherStand) value looks at strand bias supporting variant calls.
+It's a PHRED scaled probability of bias.
+Here we want to filter off large values. E.G keep FS < 60.
+Don't go too aggressive on this.
+
+```{r}
+ggplot(INFO, aes(x=FS)) + geom_density(na.rm=TRUE, trim = TRUE) + scale_x_log10() + ggtitle("log10(FS)")
+```
+
+The SOR (StrandOddsRatio) also looks at strand bias.
+You can go reasonably hard on this, e.g. somewhere after the tail starts to flatten.
+We're looking to remove high values in here. E.G keep SOR < 4
+
+```{r}
+ggplot(INFO, aes(x=SOR)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("SOR")
+```
+
+With MQ we're filtering out bad read alignments.
+Don't go too aggressive on this.
+Filter of things with a low MQ. E.G. keep MQ > 30-40
+It can also be useful to look at MQ in the chromoqc plots.
+Often low MQ scores will be in gene-poor regions, so you might like to filter them out.
+
+```{r}
+ggplot(INFO, aes(x=MQ)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("MQ")
+```
+
+> Note with the MQ scores, the plot in the GATK guide with a single sharp peak around 60 almost never happens in my experience.
+> I always seem to have a hump below 40. Especially with SNPs.
+
+
+The MQRankSum also looks at mapping quality.
+Here we want to pick off the extremes.
+Pretend it's a normal distribution around zero and trim off the tails.
+In practice it's enough to just remove the low values.
+The GATK recommended value is -12.5
+
+```{r}
+ggplot(INFO, aes(x=MQRankSum)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("MQRankSum")
+```
+
+
+Again, here we want to trim off the tails assuming it's a normal distribution.
+Again in practice it's enough just to remove the lower values.
+GATK recommends a threshold of -8.
+
+```{r}
+ggplot(INFO, aes(x=ReadPosRankSum)) + geom_density(na.rm=TRUE, trim = TRUE) + ggtitle("ReadPosRankSum")
+```
+
+
+
+## ChromoQC plots.
+
+Ok. So for filtering by DP i find it's often better to see it in genomic context.
+You can be much harder than you might think because repeat rich regions always have higher depth.
+So you probably want to set the DP somewhere near the high values in the gene-rich region.
+
+
+```{r}
+genome <- ape::read.dna(GENOME, format = "fasta")
+gff <- read.table(GFF, sep="\t", quote = "")
+```
+
+
+```{r}
+genic_variant_dp <- c()
+nongenic_variant_dp <- c()
+genic_variant_mq <- c()
+nongenic_variant_mq <- c()
+
+for (chr in labels(genome)) {
+  chrom_vcf <- vcf[vcf@fix[, "CHROM"] == chr]
+
+  if ( vcfR::nrow(chrom_vcf) < 1 ) {
+      next
+  }
+
+  chrom_seq <- genome[chr]
+  chrom_gff <- gff[gff[, 1] == chr,]
+  if (GENES_ONLY) {
+    chrom_gff <- chrom_gff[chrom_gff[, 3] %in% c("gene", "GENE", "mRNA", "mrna", "transcript", "CDS", "cds", "exon"),]
+  }
+
+  chrom <- create.chromR(name=chr, vcf=chrom_vcf, seq=chrom_seq, ann=chrom_gff, verbose = FALSE)
+  chrom <- proc.chromR(chrom, verbose = FALSE)
+  chromoqc(chrom)
+  
+  
+  FLANK <- GENE_DIST_THRESHOLD
+  CHROM_LEN <- length(chrom_seq[[1]])
+  
+  starts <- chrom@ann[,4] - FLANK
+  starts[starts < 1] <- 1
+  
+  ends <- chrom@ann[,5] + FLANK
+  ends[ends > CHROM_LEN] <- CHROM_LEN
+  
+  gene_ranges <- GRanges(
+    seqnames = chrom@ann[,1],
+    ranges=IRanges(start = starts, end = ends),
+  )
+  gene_ranges <- reduce(gene_ranges, drop.empty.ranges = TRUE)
+  
+  variant_ranges <- GRanges(
+    seqnames = chrom@var.info[, "CHROM"],
+    ranges = IRanges(start = chrom@var.info[, "POS"], width = 1),
+    DP = chrom@var.info[, "DP"],
+    MQ = chrom@var.info[, "MQ"]
+  )
+  
+  overlapping <- subsetByOverlaps(variant_ranges, gene_ranges)
+  nonoverlapping <- variant_ranges[countOverlaps(variant_ranges, gene_ranges) < 1]
+  
+  genic_variant_dp <- c(genic_variant_dp, overlapping$DP)
+  nongenic_variant_dp <- c(nongenic_variant_dp, nonoverlapping$DP)
+  genic_variant_mq <- c(genic_variant_mq, overlapping$MQ)
+  nongenic_variant_mq <- c(nongenic_variant_mq, nonoverlapping$MQ)
+}
+```
+
+You should be able to see that the MQ and DP have different distributions in regions missing gene predictions.
+
+Here are the quartiles of variants near genes.
+
+```{r}
+print("Genic variants")
+print(paste0("N=", sum(!is.na(genic_variant_dp))))
+
+genic <- rbind(
+  quantile(genic_variant_dp, c(0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0), na.rm = TRUE),
+  quantile(genic_variant_mq, c(0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0), na.rm = TRUE)
+)
+row.names(genic) <- c("DP", "MQ")
+print(genic)
+```
+
+
+And here are the quartiles of variants not near genes.
+
+```{r}
+print("Non-genic variants")
+print(paste0("N=", sum(!is.na(nongenic_variant_dp))))
+
+nongenic <- rbind(
+  quantile(nongenic_variant_dp, c(0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0), na.rm = TRUE),
+  quantile(nongenic_variant_mq, c(0.0, 0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 0.99, 1.0), na.rm = TRUE)
+)
+row.names(nongenic) <- c("DP", "MQ")
+print(nongenic)
+```
+
+
+So i'll output a basic filtering command using some quartile thresholds to get you started.
+Try tweaking these values based on your feelings.
+
+
+As a reminder here are our quartiles from earlier.
+
+```{r}
+SUMMARY
+```
+
+
+```{r}
+DP_MAX <- genic["DP", "95%"]
+DP_MIN <- pmin(4, SUMMARY["DP", "1%"])
+MQ_MIN <- pmin(40, SUMMARY["MQ", "10%"])
+QD_MIN <- 2 # SUMMARY["QD", "1%"]
+FS_MAX <- SUMMARY["FS", "99%"]
+SOR_MAX <- SUMMARY["SOR", "95%"]
+MQRANKSUM_MIN <- -12.5  # SUMMARY["MQRankSum", "1%"]
+READPOSRANKSUM_MIN <- -8.0 # SUMMARY["ReadPosRankSum", "1%"]
+```
+
+
+```{r}
+command <- paste0(
+  "bcftools filter --include '",
+  "(INFO/DP <= ", DP_MAX, ") && ",
+  "(INFO/DP >= ", DP_MIN, ") && ",
+  "(INFO/MQ >= ", MQ_MIN, ") && ",
+  "(INFO/QD >= ", QD_MIN, ") && ",
+  "(INFO/FS <= ", FS_MAX, ") && ",
+  "(INFO/SOR <= ", SOR_MAX, ") && ",
+  "(INFO/MQRankSum >= ", MQRANKSUM_MIN, ") && ",
+  "(INFO/ReadPosRankSum >= ", READPOSRANKSUM_MIN, ")",
+  "' ",
+  "-O z -o filtered.vcf.gz ",
+  VCF
+)
+```
+Try running something like this command to hard filter.
+You can also soft filter the VCF using the `--soft-filter` option.
+See the BCFTools documentation for more details: http://www.htslib.org/doc/1.0/bcftools.html#filter
+
+```{r, message=TRUE}
+message(command)
+```
+
+
+
+Good luck with your variants!
+
+
+```{r}
+sessionInfo()
+```
+

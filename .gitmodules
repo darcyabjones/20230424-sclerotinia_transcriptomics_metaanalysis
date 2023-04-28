@@ -1,3 +1,9 @@
 [submodule "03-RNAseq/code/slurm_scripts"]
 	path = 03-RNAseq/code/slurm_scripts
 	url = https://github.com/darcyabjones/slurm_scripts
+[submodule "code/slurm_scripts"]
+	path = code/slurm_scripts
+	url = git@github.com:ccdmb/slurm_scripts.git
+[submodule "code/prj"]
+	path = code/prj
+	url = git@github.com:darcyabjones/prj.git

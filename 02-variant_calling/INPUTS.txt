@@ -36,3 +36,23 @@ Code has touched these files:
 - NEW: input/L_angustifoli_sclerotinia_HGC7MBCXX_GCCAATAT_L001_R2.fastq.gz (sha256:73fa31fdaf374c1f02cc6e27095b5a862de1c7cc01929cf51a6a2adce6e55e58)
 - NEW: input/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R1.fastq.gz (sha256:e6155c23f9048736d73e24db305371f115cc02651bfd240fe9e8b9fe2098c983)
 - NEW: input/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R2.fastq.gz (sha256:28b4a3325fd85434db9b44bc2a6c02a69e66db2e1899ed109c5f406680c00fab)
+
+
+## Added input at 20230428
+
+```
+zcat ../input/reference_genome/Sscl1980-nuclear.fasta.gz > input/Sscl1980-nuclear.fasta
+samtools faidx input/Sscl1980-nuclear.fasta
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-nuclear.fasta (sha256:dbcc582d9ec239e2554bbe807edf89163c51da65ddd055fe08b3747c10a735ba)
+
+## Added input at 20230428
+
+```
+zcat ../input/reference_genome/Sscl1980-mRNA.gtf.gz > input/Sscl1980-mRNA.gtf
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-mRNA.gtf (sha256:b7fd91ed9b0623e76f87f22361a5dadd441cf83899ad0eb70c7d0c3a5ff747c1)
