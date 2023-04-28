@@ -1,0 +1,38 @@
+## Added input at 20230428-111243
+
+SRA inputs
+
+```
+awk -F"\t" -v OFS="\t" '$2 != "PRJNA885577" {print}' ../input/resequencing.tsv > input/resequencing.tsv
+```
+
+Code has touched these files:
+- NEW: input/resequencing.tsv (sha256:61d502a825596d89b5f29546823e4e60fa33ac2aa2fc34680406cf6d8f4313eb) 
+
+
+## Added input at 20230428-112038
+
+Sclerotinia minor LC41 R1
+
+```
+wget -c -O input/T20210808_00001_RUN305_1.fq.gz https://ftp.cngb.org/pub/CNSA/data3/CNP0001962/CNS0387500/CNX0326925/CNR0399639/T20210808_00001_RUN305_1.fq.gz
+wget -c -O input/T20210808_00001_RUN305_2.fq.gz https://ftp.cngb.org/pub/CNSA/data3/CNP0001962/CNS0387500/CNX0326925/CNR0399639/T20210808_00001_RUN305_2.fq.gz
+```
+
+Code has touched these files:
+- NEW: input/T20210808_00001_RUN305_1.fq.gz (sha256:515ce89a17d3f39bf02535695afd46b40e915a4e191695e74077c4725d4e1566)
+- NEW: input/T20210808_00001_RUN305_2.fq.gz (sha256:f893081edf7e53b218665afbca25b40c94c25e407f64df6b2a224939af354258)
+
+## Added input at 20230428-123605
+
+Lupin infecting isolates from Mahsa
+
+```
+cp /work/djones/L_angustifoli_sclerotinia_HGC7MBCXX_GCCAATAT_L001_R1.fastq.gz /work/djones/L_angustifoli_sclerotinia_HGC7MBCXX_GCCAATAT_L001_R2.fastq.gz /work/djones/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R1.fastq.gz /work/djones/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R2.fastq.gz input/
+```
+
+Code has touched these files:
+- NEW: input/L_angustifoli_sclerotinia_HGC7MBCXX_GCCAATAT_L001_R1.fastq.gz (sha256:7af49e05dfcc46000ca8bd347700e84758a32ca21420c898c7865452a20b8c61)
+- NEW: input/L_angustifoli_sclerotinia_HGC7MBCXX_GCCAATAT_L001_R2.fastq.gz (sha256:73fa31fdaf374c1f02cc6e27095b5a862de1c7cc01929cf51a6a2adce6e55e58)
+- NEW: input/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R1.fastq.gz (sha256:e6155c23f9048736d73e24db305371f115cc02651bfd240fe9e8b9fe2098c983)
+- NEW: input/L_mutab_Sclerotinia_HGC7MBCXX_CGATGTAT_L001_R2.fastq.gz (sha256:28b4a3325fd85434db9b44bc2a6c02a69e66db2e1899ed109c5f406680c00fab)

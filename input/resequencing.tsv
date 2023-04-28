@@ -1,0 +1,40 @@
+sra	bioproject	biosample	DOI	url	platform	read_length	strategy	organism	accession	collection_host	collection_location	collection_year	Notes
+SRR12300515	PRJNA647983	SAMN15615602	https://doi.org/10.1186%2Fs12864-021-07402-x		ILLUMINA	150	PE	Sclerotinia sclerotiorum	F5				
+SRR12300516	PRJNA647983	SAMN15615601	https://doi.org/10.1186%2Fs12864-021-07402-x		ILLUMINA	150	PE	Sclerotinia sclerotiorum	F4				Fludioxinil resistant
+SRR8485433	PRJNA516948	SAMN10817213	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	SK35	Brassica napus	Canada: Rouleau, Saskatchewan	2010	
+SRR8485434	PRJNA516948	SAMN10817214	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	MB21	Brassica napus	Canada: Morton, Manitoba	2010	
+SRR8485435	PRJNA516948	SAMN10817211	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	AB29	Brassica napus	Canada: Cayley, Alberta	2010	
+SRR8485436	PRJNA516948	SAMN10817212	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	321	Brassica napus	Canada: Olds, Alberta	1992	
+SRR8485437	PRJNA516948	SAMN10817209	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	BloC014	Brassica napus	France: Blois	2010	
+SRR8485438	PRJNA516948	SAMN10817210	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	FrB5	Brassica napus	France: Dijon	2010	
+SRR8485439	PRJNA516948	SAMN10817207	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	P163	Brassica napus	France: Blois	2010	
+SRR8485440	PRJNA516948	SAMN10817208	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	BloC104	Brassica napus	France: Blois	2010	
+SRR8485441	PRJNA516948	SAMN10817205	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	S55	Brassica napus	USA	1987	
+SRR8485442	PRJNA516948	SAMN10817206	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	100	PE	Sclerotinia sclerotiorum	P314	Brassica napus	France: Blois	2010	
+SRR8485443	PRJNA516948	SAMN10817201	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU4.2	Brassica napus	Australia: Mount Barker, Western Australia	2014	
+SRR8485444	PRJNA516948	SAMN10817202	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU6.1	Brassica napus	Australia: Mount Barker, Western Australia	2014	
+SRR8485445	PRJNA516948	SAMN10817199	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU11.19	Brassica napus	Australia: Geraldton, Western Australia	2014	
+SRR8485446	PRJNA516948	SAMN10817200	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU11.7	Lupinus sp.	Australia: Eneabba, Western Australia	2013	
+SRR8485447	PRJNA516948	SAMN10817197	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU10.20	Brassica napus	Australia: Geraldton, Western Australia	2014	
+SRR8485448	PRJNA516948	SAMN10817198	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU10.7	Brassica napus	Australia: Geraldton, Western Australia	2014	
+SRR8485449	PRJNA516948	SAMN10817195	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU10.12	Brassica napus	Australia: Geraldton, Western Australia	2014	
+SRR8485450	PRJNA516948	SAMN10817196	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU10.17	Brassica napus	Australia: Geraldton, Western Australia	2014	
+SRR8485451	PRJNA516948	SAMN10817203	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU8.24	Brassica napus	Australia: South Stirling, Western Australia	2014	
+SRR8485452	PRJNA516948	SAMN10817204	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	250	PE	Sclerotinia sclerotiorum	CU8.30	Brassica napus	Australia: South Stirling, Western Australia	2014	
+SRR8608046	PRJNA516948	SAMN10849845	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	Ss45	Helianthus annus	Netherlands	1977	
+SRR8608047	PRJNA516948	SAMN10849844	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	Ss44	Carthamus tinctorius	Morocco: Meknes	1971	
+SRR8608048	PRJNA516948	SAMN10849843	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	Sssaf		South Africa	1964	
+SRR8608049	PRJNA516948	SAMN10849842	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia minor	SsChi		Chile	1960	
+SRR8608050	PRJNA516948	SAMN10849841	https://doi.org/10.1371/journal.pone.0214201		ILLUMINA	125	PE	Sclerotinia sclerotiorum	MB52	Brassica napus	Canada: Shoal Lake, Manitoba	2010	
+SRR4242063	PRJNA342788	SAMN05768143	https://doi.org/10.7554%2FeLife.22472		ILLUMINA	100	PE	Sclerotinia sclerotiorum	FrB5		France		
+SRR4242064	PRJNA342788	SAMN05768144	https://doi.org/10.7554%2FeLife.22472		ILLUMINA	100	PE	Sclerotinia sclerotiorum	P314		France		
+SRR4242065	PRJNA342788	SAMN05768145	https://doi.org/10.7554%2FeLife.22472		ILLUMINA	100	PE	Sclerotinia sclerotiorum	P163		France		
+SRR4242066	PRJNA342788	SAMN05768146	https://doi.org/10.7554%2FeLife.22472		ILLUMINA	100	PE	Sclerotinia sclerotiorum	C104		France		
+SRR4242067	PRJNA342788	SAMN05768147	https://doi.org/10.7554%2FeLife.22472		ILLUMINA	100	PE	Sclerotinia sclerotiorum	C014		France		
+ERR4705209	PRJEB36746	SAMEA6541881	https://doi.org/10.1038/s41396-021-01058-x		ILLUMINA	100	PE	Sclerotinia trifoliorum	SwB9				
+SRR21762768	PRJNA885577	SAMN31099099	-		BGISEQ	150	PE	Sclerotinia nivalis	SnTB1	Panax quinquefolius	China: Shaanxi, Taibai	2020	Unpublished
+SRR21762769	PRJNA885577	SAMN31099099	-		BGISEQ	150	PE	Sclerotinia nivalis	SnTB1	Panax quinquefolius	China: Shaanxi, Taibai	2020	Unpublished
+SRR14280050	PRJNA722876	SAMN18795336	https://doi.org/10.1038/s41598-022-22028-z		ILLUMINA	150	PE	Sclerotinia sclerotiorum	ESR-01	Brassica juncea	India: Rajasthan, Bharatpur	2015	
+			https://doi.org/10.1094/PDIS-10-21-2150-A	https://ftp.cngb.org/pub/CNSA/data3/CNP0001962/CNS0387500/CNX0326925/CNR0399639/	MGISEQ		PE	Sclerotinia minor	LC41	Lactuca sativa	China: Hubei, Lichun		
+	PRJNA449247	SAMN08892143	https://doi.org/10.1186/s12864-019-5774-2		ILLUMINA	250	PE	Sclerotinia sclerotiorum	Sscl-Lang	Lupinus angustifolius	Australia: Mount Barker, Western Australia		SRA data not available, but kindly provided by Mahsa Mousavi-Derazmahalleh.
+	PRJNA449247	SAMN08892144	https://doi.org/10.1186/s12864-019-5774-2		ILLUMINA	250	PE	Sclerotinia sclerotiorum	Sscl-Lmut	Lupinus mutabilis	Australia: Western Australia	2007	SRA data not available, but kindly provided by Mahsa Mousavi-Derazmahalleh.

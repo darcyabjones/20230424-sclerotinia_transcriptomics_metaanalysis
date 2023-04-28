@@ -21,7 +21,7 @@ Code has touched these files:
 ## Added input at 20230424-165700
 
 ```
-zcat ../input/reference_genome/Sscl1980-mRNA.gtf.gz input/Sscl1980-mRNA.gtf
+zcat ../input/reference_genome/Sscl1980-mRNA.gtf.gz > input/Sscl1980-mRNA.gtf
 ```
 
 Code has touched these files:

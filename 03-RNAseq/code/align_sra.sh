@@ -49,6 +49,8 @@ then
         -R "${SRA}" \
         --thread 3
 
+    rm -f "${TMPPREFIX}/${SRA}_1.fastq" "${TMPPREFIX}/${SRA}_2.fastq"
+
     rm -rf -- "${TMPPREFIX}/check_strandedness"
     check_strandedness \
         --nreads 500000 \
@@ -70,6 +72,9 @@ else
         --html "${OUTDIR}/fastp/${SRA}-fastp.html" \
         -R "${SRA}" \
         --thread 3
+
+    rm -f "${TMPPREFIX}/${SRA}.fastq"
+
     rm -rf -- "${TMPPREFIX}/check_strandedness"
     check_strandedness \
         --nreads 500000 \
@@ -103,9 +108,8 @@ elif [[ "${STRANDOUT}" == 'Data is likely unstranded' ]]
 then
     STRAND="unstranded ${STRATEGY}"
 else
-    echo "ERROR: could not determine strandedness" >&2
-    cat "${TMPPREFIX}/check_strandedness.txt" >&2
-    exit 1
+    echo "WARNING: could not determine strandedness" >&2
+    STRAND="unstranded ${STRATEGY}"
 fi
 
 echo "${STRAND}" > "${OUTDIR}/strandedness/${SRA}.txt"
@@ -121,7 +125,7 @@ then
   samtools faidx "${REFERENCE}"
 fi
 
-if [[ "${STRAND}" != "unstranded" ]]
+if [[ "${STRAND}" != "unstranded SE" ]] && [[ "${STRAND}" != "unstranded PE" ]]
 then
     STRAND_PARAM="--rna-strandness '${STRAND}'"
 else
@@ -170,7 +174,7 @@ samtools stats "${OUTCRAM}" --reference "${REFERENCE}" --ref-seq "${REFERENCE}" 
 
 code/cram_to_bigwig.sh "${REFERENCE}.fai" "${OUTCRAM}" "${OUTDIR}/bigwigs/${SRA}.bw"
 
-if [[ "${STRAND}" != "unstranded" ]]
+if [[ "${STRAND}" != "unstranded SE" ]] && [[ "${STRAND}" != "unstranded PE" ]]
 then
     code/cram_to_bigwig_stranded.sh "${REFERENCE}.fai" "${OUTCRAM}" "${OUTDIR}/bigwigs/${SRA}"
 fi

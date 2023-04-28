@@ -7,3 +7,5 @@
 ^venv/*
 ^NOTES.txt
 work/.*
+input/resequencing\.tsv
+input/T20210808_00001_RUN305_1\.fq\.gz
