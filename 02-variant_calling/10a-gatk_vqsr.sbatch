@@ -3,31 +3,34 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
 #SBATCH --time=2:00:00
-#SBATCH --partition=work
+#SBATCH --partition=workq
 #SBATCH --output=%x-%A.stdout
 #SBATCH --error=%x-%A.stderr
 #SBATCH --export=NONE
-#SBATCH --account=y95
+#SBATCH --account=djones
 #SBATCH --job-name=filter_variants
 
-module load miniconda3/latest
+module load system/Miniconda3
 conda activate ./condaenv/
 
 set -euo pipefail
 
-REFERENCE_GENOME="$(realpath "input/ArME14.fasta")"
-KNOWN_VCF="output/gatk_r1_joint_genotypes-filtered.g.vcf.gz"
-INVCF="work/gatk_r2_joint_genotypes.g.vcf.gz"
+REFERENCE_GENOME="$(realpath "input/Sscl1980-nuclear.fasta")"
+KNOWN_VCF="output/round1/filtered.g.vcf.gz"
+INVCF="work/gatk_combine_round2.g.vcf.gz"
 
 gatk MakeSitesOnlyVcf \
     -I "${INVCF}" \
     -O work/vqsr_sites_only.vcf.gz
 
-
 # The --max-gaussians parameter sets the expected number of clusters in modeling.
 # If a dataset gives fewer distinct clusters, e.g. as can happen for smaller data,
 # then the tool will tell you there is insufficient data with a No data found error
 # message. In this case, try decrementing the --max-gaussians value.
+
+
+mkdir -p output/vqsr
+mkdir -p work/vqsr
 
 gatk --java-options "-Xmx7g -Xms7g" VariantRecalibrator \
     -V work/vqsr_sites_only.vcf.gz \
@@ -38,55 +41,55 @@ gatk --java-options "-Xmx7g -Xms7g" VariantRecalibrator \
     --max-gaussians 4 \
     -resource:bootstap,known=false,training=true,truth=true ${KNOWN_VCF} \
     -O output/vqsr_indels.recal \
-    --tranches-file output/vqsr_indels.tranches \
-    --rscript-file output/vqsr_indels_plots.R
+    --tranches-file output/vqsr/indels.tranches \
+    --rscript-file output/vqsr/indels_plots.R
 
 gatk --java-options "-Xmx5g -Xms5g" \
     ApplyVQSR \
     -V "${INVCF}" \
-    --recal-file output/vqsr_indels.recal \
-    --tranches-file output/vqsr_indels.tranches \
+    --recal-file output/vqsr/indels.recal \
+    --tranches-file output/vqsr/indels.tranches \
     --truth-sensitivity-filter-level 99.7 \
     --create-output-variant-index true \
     -mode INDEL \
-    -O work/vqsr_indel.recalibrated.vcf.gz
+    -O work/vqsr/indel.recalibrated.vcf.gz
 
 
 gatk --java-options "-Xmx7g -Xms7g" VariantRecalibrator \
-    -V work/vqsr_sites_only.vcf.gz \
+    -V work/vqsr/sites_only.vcf.gz \
     --trust-all-polymorphic \
     -tranche 100.0 -tranche 99.95 -tranche 99.9 -tranche 99.8 -tranche 99.6 -tranche 99.5 -tranche 99.4 -tranche 99.3 -tranche 99.0 -tranche 98.0 -tranche 97.0 -tranche 90.0 \
     -an QD -an MQRankSum -an ReadPosRankSum -an FS -an MQ -an SOR -an DP \
     -mode SNP \
     --max-gaussians 6 \
     -resource:bootstrap,known=false,training=true,truth=true ${KNOWN_VCF} \
-    -O output/vqsr_snps.recal \
-    --tranches-file output/vqsr_snps.tranches \
-    --rscript-file output/vqsr_snps_plots.R
+    -O output/vqsr/snps.recal \
+    --tranches-file output/vqsr/snps.tranches \
+    --rscript-file output/vqsr/snps_plots.R
 
 gatk --java-options "-Xmx5g -Xms5g" \
     ApplyVQSR \
-    -V work/vqsr_indel.recalibrated.vcf.gz \
-    --recal-file output/vqsr_snps.recal \
-    --tranches-file output/vqsr_snps.tranches \
+    -V work/vqsr/indel.recalibrated.vcf.gz \
+    --recal-file output/vqsr/snps.recal \
+    --tranches-file output/vqsr/snps.tranches \
     --truth-sensitivity-filter-level 99.7 \
     --create-output-variant-index true \
     -mode SNP \
-    -O work/vqsr_snp.recalibrated.vcf.gz
+    -O work/vqsr/snp.recalibrated.vcf.gz
 
 
 bcftools norm \
     --fasta-ref "${REFERENCE_GENOME}" \
     --multiallelics +any \
     -Ou \
-    work/vqsr_snp.recalibrated.vcf.gz \
+    work/vqsr/snp.recalibrated.vcf.gz \
 | bcftools view \
    --trim-alt-alleles --min-alleles 2 \
    -Ou \
    - \
 | bcftools sort \
    -Oz \
-   -o output/gatk_r2_joint_genotypes-vqsr_filtered.vcf.gz \
+   -o output/vqsr/filtered.vcf.gz \
    -
 
-bcftools index --tbi output/gatk_r2_joint_genotypes-vqsr_filtered.vcf.gz
+bcftools index --tbi output/vqsr/filtered.vcf.gz

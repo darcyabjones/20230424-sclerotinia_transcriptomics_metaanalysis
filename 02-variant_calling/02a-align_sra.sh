@@ -15,6 +15,7 @@ IDS=( $(tail -n+2 input/resequencing.tsv | awk -F'\t' '!($1 ~ /^\s*$/) {print $1
   --cpus-per-task 4 \
   --mem 8G \
   --batch-dry-run \
+  --batch-max-simultaneous 8 \
   --account djones \
   --batch-module system/Miniconda3 \
   --batch-setup 'source /home/djones/.bashrc && unset PERL5LIB && eval "$(conda shell.bash hook)"' \

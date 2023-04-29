@@ -2,14 +2,23 @@
 
 set -euo pipefail
 
-source ./file_locations.sh
-
-if [ -f "06-gatk_r2_bqsr.log" ]
+if [ -f "06-gatk_bqsr_round2.log" ]
 then
-    RESUME_PARAM="--batch-resume ./06-gatk_r2_bqsr.log"
+    RESUME_PARAM="--batch-resume ./06-gatk_bqsr_round2.log"
 else
     RESUME_PARAM=""
 fi
 
-code/slurm_scripts/bin/pt 'code/bqsr.sh input/ArME14.fasta output/recalibrated_illumina_alignments/{b} output/gatk_r1_joint_genotypes-filtered.g.vcf.gz {}' output/illumina_alignments/*.cram \
-  | code/slurm_scripts/bin/sbatch_jobarray.sh --batch-module miniconda3/latest --cpus-per-task 1 --mem 4G --partition work --time 3:00:00 --job-name bqsr ${RESUME_PARAM}
+../code/slurm_scripts/bin/pt 'code/gatk_bqsr.sh input/Sscl1980-nuclear.fasta output/crams_bqsr/{be} output/round1/filtered.g.vcf.gz {}' output/crams/*.cram \
+| ../code/slurm_scripts/bin/sbatch_jobarray.sh \
+  --batch-setup 'source /home/djones/.bashrc && unset PERL5LIB && eval "$(conda shell.bash hook)"' \
+  --batch-condaenv ${PWD}/condaenv \
+  --batch-module system/Miniconda3 \
+  --cpus-per-task 1 \
+  --batch-max-simultaneous 8 \
+  --mem 4G \
+  --partition workq \
+  --account djones \
+  --time 3:00:00 \
+  --job-name bqsr \
+  ${RESUME_PARAM}

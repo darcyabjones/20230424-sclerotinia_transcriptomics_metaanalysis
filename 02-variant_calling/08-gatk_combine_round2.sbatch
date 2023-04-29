@@ -3,32 +3,32 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=8G
 #SBATCH --time=3:00:00
-#SBATCH --partition=work
+#SBATCH --partition=workq
 #SBATCH --output=%x-%A.stdout
 #SBATCH --error=%x-%A.stderr
 #SBATCH --export=NONE
-#SBATCH --account=y95
+#SBATCH --account=djones
 #SBATCH --job-name=joint_genotyping
 
-module load miniconda3/latest
+module load system/Miniconda3
 conda activate ./condaenv/
 
 set -euo pipefail
 
-GVCFS=( work/gatk_r2_haplotype_caller/*.g.vcf.gz )
+GVCFS=( work/gatk_haplotype_round2/*.g.vcf.gz )
 
 COMBINED_FILE="/tmp/$$_combined_genotypes.g.vcf.gz"
 
 trap "rm -f ${COMBINED_FILE}" EXIT
 
 srun --export=ALL gatk --java-options "-Xmx7g" CombineGVCFs \
-    --reference input/ArME14.fasta \
+    --reference input/Sscl1980-nuclear.fasta \
     --output "${COMBINED_FILE}" \
     ${GVCFS[@]/#/--variant }
 
 
 srun --export=ALL gatk --java-options "-Xmx7g" GenotypeGVCFs \
-    --reference input/ArME14.fasta \
-    --output work/gatk_r2_joint_genotypes.g.vcf.gz \
+    --reference input/Sscl1980-nuclear.fasta \
+    --output work/gatk_combine_round2.g.vcf.gz \
     --call-genotypes true \
     --variant "${COMBINED_FILE}"

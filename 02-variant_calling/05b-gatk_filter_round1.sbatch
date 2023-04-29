@@ -15,49 +15,52 @@ conda activate ./condaenv/
 
 set -euo pipefail
 
-REFERENCE_GENOME="$(realpath "input/ArME14.fasta")"
+REFERENCE_GENOME="$(realpath "input/Sscl1980-nuclear.fasta")"
+WORKDIR="${PWD}/work/filter_round1"
+OUTDIR="${PWD}/output/round1"
+mkdir -p "${OUTDIR}" "${WORKDIR}"
 
 bcftools filter \
     --include '(INFO/DP <= 900) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
     -O z \
-    -o work/gatk_r1_joint_genotypes_SNP-filtered.g.vcf.gz \
-    output/gatk_r1_joint_genotypes_SNP.g.vcf.gz
+    -o "${WORKDIR}/SNP-filtered.g.vcf.gz" \
+    "${WORKDIR}/SNP.g.vcf.gz"
 
-bcftools index work/gatk_r1_joint_genotypes_SNP-filtered.g.vcf.gz
-
-bcftools filter \
-    --include '(INFO/DP <= 900) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
-    -O z \
-    -o work/gatk_r1_joint_genotypes_INDEL-filtered.g.vcf.gz \
-    output/gatk_r1_joint_genotypes_INDEL.g.vcf.gz
-
-bcftools index work/gatk_r1_joint_genotypes_INDEL-filtered.g.vcf.gz
+bcftools index "${WORKDIR}/SNP-filtered.g.vcf.gz"
 
 bcftools filter \
     --include '(INFO/DP <= 900) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
     -O z \
-    -o work/gatk_r1_joint_genotypes_MIXED-filtered.g.vcf.gz \
-    output/gatk_r1_joint_genotypes_MIXED.g.vcf.gz
+    -o "${WORKDIR}/INDEL-filtered.g.vcf.gz" \
+    "${WORKDIR}/INDEL.g.vcf.gz"
 
-bcftools index work/gatk_r1_joint_genotypes_MIXED-filtered.g.vcf.gz
+bcftools index "${WORKDIR}/INDEL-filtered.g.vcf.gz"
+
+bcftools filter \
+    --include '(INFO/DP <= 900) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
+    -O z \
+    -o "${WORKDIR}/MIXED-filtered.g.vcf.gz" \
+    "${WORKDIR}/MIXED.g.vcf.gz"
+
+bcftools index "${WORKDIR}/MIXED-filtered.g.vcf.gz"
 
 #bcftools filter \
 #    --include '(INFO/DP <= 900) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
 #    -O z \
-#    -o work/gatk_r1_joint_genotypes_MNP-filtered.g.vcf.gz \
-#    output/gatk_r1_joint_genotypes_MNP.g.vcf.gz
+#    -o "${WORKDIR}/MNP-filtered.g.vcf.gz" \
+#    "${WORKDIR}/MNP.g.vcf.gz"
 #
 #bcftools filter \
 #    --include '(INFO/DP <= 700) && (INFO/DP >= 4) && (INFO/MQ >= 40) && (INFO/QD >= 2) && (INFO/FS <= 125) && (INFO/SOR <= 6) && (INFO/MQRankSum >= -12.5) && (INFO/ReadPosRankSum >= -8)' \
 #    -O z \
-#    -o work/gatk_r1_joint_genotypes_SYMBOLIC-filtered.g.vcf.gz \
-#    output/gatk_r1_joint_genotypes_SYMBOLIC.g.vcf.gz
+#    -o "${WORKDIR}/SYMBOLIC-filtered.g.vcf.gz" \
+#    "${WORKDIR}/SYMBOLIC.g.vcf.gz"
 
 
 bcftools concat \
     --allow-overlaps \
     -Ou \
-    work/gatk_r1_joint_genotypes_*-filtered.g.vcf.gz \
+    ${WORKDIR}/*-filtered.g.vcf.gz \
 | bcftools norm \
     --fasta-ref "${REFERENCE_GENOME}" \
     --multiallelics +any \
@@ -70,7 +73,7 @@ bcftools concat \
    - \
 | bcftools sort \
    -Oz \
-   -o output/gatk_r1_joint_genotypes-filtered.g.vcf.gz \
+   -o "${OUTDIR}/filtered.g.vcf.gz" \
    -
 
-bcftools index --tbi output/gatk_r1_joint_genotypes-filtered.g.vcf.gz
+bcftools index --tbi "${OUTDIR}/filtered.g.vcf.gz"

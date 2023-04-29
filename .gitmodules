@@ -4,3 +4,6 @@
 [submodule "code/prj"]
 	path = code/prj
 	url = git@github.com:darcyabjones/prj.git
+[submodule "code/slurm_scripts"]
+	path = code/slurm_scripts
+	url = git@github.com:darcyabjones/slurm_scripts.git

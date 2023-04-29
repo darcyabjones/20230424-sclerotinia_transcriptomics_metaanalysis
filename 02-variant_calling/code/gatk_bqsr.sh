@@ -27,6 +27,9 @@ gatk BaseRecalibrator \
     --known-sites "${VARIANTS}" \
     --output "${OUTFILE}.before.table"
 
+
+trap "rm -f '${OUTFILE}.bam' '${OUTFILE}.bam.bai'" EXIT
+
 gatk ApplyBQSR \
     --input "${CRAM}" \
     --reference "${REFERENCE}" \
@@ -44,8 +47,5 @@ gatk AnalyzeCovariates \
     --after-report-file "${OUTFILE}.after.table" \
     --plots-report-file "${OUTFILE}.recal.pdf"
 
-samtools view -O CRAM,embed_ref -o "${OUTFILE}" "${OUTFILE}.bam"
-samtools index "${OUTFILE}"
-
-rm -f "${OUTFILE}.bam" "${OUTFILE}.bam.bai"
-
+samtools view -O CRAM,embed_ref -o "${OUTFILE}.cram" "${OUTFILE}.bam"
+samtools index "${OUTFILE}.cram"
