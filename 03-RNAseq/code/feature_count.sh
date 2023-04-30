@@ -3,12 +3,13 @@
 set -euo pipefail
 
 SRA="$1"
-GENOME="$2"
-GTF="$3"
-OUTDIR="${4:-output}"
+STRATEGY="$2"
+STRAND="$3"
+GENOME="$4"
+GTF="$5"
+OUTDIR="${6:-output}"
 
 CRAM="${OUTDIR}/crams/${SRA}.cram"
-STRAND=$(cat "${OUTDIR}/strandedness/${SRA}.txt")
 
 NCPUS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 
@@ -23,7 +24,7 @@ else
     STRANDFLAG=""
 fi
 
-if [ "${STRAND}" == "FR" ] || [ "${STRAND}" == "RF" ] || [ "${STRAND}" == "unstranded PE" ]
+if [ "${STRAND}" == "FR" ] || [ "${STRAND}" == "RF" ] || [ "${STRATEGY}" == "PE" ]
 then
     FRAGMENTS="-p --countReadPairs -C"
 else
@@ -32,20 +33,27 @@ fi
 
 mkdir -p "${OUTDIR}/featurecounts_indiv"
 
-TMPDIR="${TMPDIR:-work}/tmp$$"
+TMPFILE="work/.tmp${SRA}.bam"
 
-trap "rm -rf -- '${TMPDIR}'" EXIT
+trap "rm -f '${TMPFILE}'*" EXIT
 
-mkdir -p "${TMPDIR}"
+MIN_MQ=5
 
-samtools view --reference "${GENOME}" -O BAM -o "${TMPDIR}/${SRA}.bam" "${CRAM}"
+samtools view \
+  --reference "${GENOME}" \
+  --min-MQ "${MIN_MQ}" \
+  -O BAM \
+  --write-index \
+  -o "${TMPFILE}" \
+  "${CRAM}"
 
 featureCounts \
     ${STRANDFLAG} \
     ${FRAGMENTS} \
+    -Q "${MIN_MQ}" \
     -t exon \
     -g gene_id \
     -T "${NCPUS}" \
     -a "${GTF}" \
     -o "${OUTDIR}/featurecounts_indiv/${SRA}.txt" \
-    "${TMPDIR}/${SRA}.bam"
+    "${TMPFILE}"

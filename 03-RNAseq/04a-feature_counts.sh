@@ -9,15 +9,18 @@ else
     RESUME_PARAM=""
 fi
 
-code/slurm_scripts/bin/pt "code/feature_count.sh {be} input/Sscl1980-nuclear.fasta input/Sscl1980-mRNA.gtf" output/crams/*.cram  \
-| code/slurm_scripts/bin/sbatch_jobarray.sh \
+tail -n+2 input/sra_rnaseq.tsv \
+| awk '$14 == "TRUE" || $14 == "NETWORK_ONLY"' \
+| ../code/slurm_scripts/bin/pt --file - "code/feature_count.sh {0} {6} {7} input/Sscl1980-nuclear.fasta work/genes.gtf"  \
+| ../code/slurm_scripts/bin/sbatch_jobarray.sh \
   --cpus-per-task 4 \
   --mem 8G \
   --batch-dry-run \
   --batch-module system/Miniconda3 \
   --batch-setup 'source /home/djones/.bashrc && eval "$(conda shell.bash hook)"' \
   --batch-condaenv ${PWD}/condaenv \
-  --partition work \
+  --partition workq \
+  --account djones \
   --time 4:00:00 \
   --job-name feature_counts \
   ${RESUME_PARAM}

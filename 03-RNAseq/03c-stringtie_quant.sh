@@ -9,15 +9,18 @@ else
     RESUME_PARAM=""
 fi
 
-code/slurm_scripts/bin/pt "code/stringtie_quant.sh {be} input/Sscl1980-nuclear.fasta output/stringtie_merged.gtf" output/crams/*.cram  \
-| code/slurm_scripts/bin/sbatch_jobarray.sh \
+tail -n+2 input/sra_rnaseq.tsv \
+| awk -F '\t' '$14 == "TRUE"' \
+| ../code/slurm_scripts/bin/pt --file - "code/stringtie_quant.sh {0} {7} input/Sscl1980-nuclear.fasta output/stringtie_merged.gtf"  \
+| ../code/slurm_scripts/bin/sbatch_jobarray.sh \
   --cpus-per-task 4 \
   --mem 8G \
   --batch-dry-run \
   --batch-module system/Miniconda3 \
   --batch-setup 'source /home/djones/.bashrc && eval "$(conda shell.bash hook)"' \
   --batch-condaenv ${PWD}/condaenv \
-  --partition work \
+  --partition workq \
+  --account djones \
   --time 4:00:00 \
   --job-name stringtie_quant \
   ${RESUME_PARAM}

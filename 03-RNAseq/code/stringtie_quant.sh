@@ -3,13 +3,12 @@
 set -euo pipefail
 
 SRA="$1"
-GENOME="$2"
-GTF="$3"
-OUTDIR="${4:-output}"
+STRAND="$2"
+GENOME="$3"
+GTF="$4"
+OUTDIR="${5:-output}"
 
 CRAM="${OUTDIR}/crams/${SRA}.cram"
-STRAND=$(cat "${OUTDIR}/strandedness/${SRA}.txt")
-
 NCPUS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 
 

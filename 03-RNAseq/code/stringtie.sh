@@ -3,12 +3,16 @@
 set -euo pipefail
 
 SRA="$1"
-GENOME="$2"
-GTF="$3"
-OUTDIR="${4:-output}"
+shift
+STRAND="$1"
+shift
+GENOME="$1"
+shift
+GTF="$1"
+shift
+CRAMS=( "$@" )
+OUTDIR="output"
 
-CRAM="${OUTDIR}/crams/${SRA}.cram"
-STRAND=$(cat "${OUTDIR}/strandedness/${SRA}.txt")
 
 NCPUS="${OMP_NUM_THREADS:-${SLURM_CPUS_PER_TASK:-1}}"
 
@@ -20,9 +24,27 @@ elif [ "${STRAND}" == "RF" ] || [ "${STRAND}" == "R" ]
 then
     STRANDFLAG="--rf"
 else
-    echo "Not prediting new transcripts as the data are unstranded" >&2
-    exit 0
+    echo "ERROR: got unknown strand $STRAND" >&2
+    exit 1
 fi
+
+
+CRAM="work/.tmp${SRA}.cram"
+trap "rm -rf -- '${CRAM}'*" EXIT
+
+samtools merge \
+  -f \
+  -u \
+  --threads "${NCPUS}" \
+  --reference "${GENOME}" \
+  -o - \
+  "${CRAMS[@]}" \
+| samtools view \
+  --reference "${GENOME}" \
+  --min-MQ 5 \
+  -O CRAM,embed_ref \
+  --write-index -o "${CRAM}" \
+  -
 
 mkdir -p "${OUTDIR}/stringtie_indiv"
 stringtie \
@@ -30,6 +52,10 @@ stringtie \
     -p "${NCPUS}" \
     -G "${GTF}" \
     ${STRANDFLAG} \
-    --conservative \
+    -g 0 \
+    -f 0.1 \
+    -j 6 \
+    -c 4 \
+    -s 4 \
     --ref "${GENOME}" \
     "${CRAM}"

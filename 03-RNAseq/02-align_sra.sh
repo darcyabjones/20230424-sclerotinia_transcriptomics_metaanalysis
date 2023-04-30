@@ -9,8 +9,10 @@ else
     RESUME_PARAM=""
 fi
 
-code/slurm_scripts/bin/pt "code/align_sra.sh {} input/Sscl1980-nuclear.fasta input/Sscl1980-mRNA.gtf input/Sscl1980-cds.fna work/hisat2_index work/kallisto_index" $(tail -n+2 input/sra_rnaseq.tsv | cut -f 1 | sort -u)  \
-| code/slurm_scripts/bin/sbatch_jobarray.sh \
+tail -n+2 input/sra_rnaseq.tsv \
+| awk -F '\t' '$14 == "TRUE"' \
+| ../code/slurm_scripts/bin/pt --file - "code/align_sra.sh {0} input/Sscl1980-nuclear.fasta input/Sscl1980-mRNA.gtf input/Sscl1980-cds.fna work/hisat2_index work/kallisto_index"  \
+| ../code/slurm_scripts/bin/sbatch_jobarray.sh \
   --cpus-per-task 4 \
   --mem 8G \
   --batch-dry-run \

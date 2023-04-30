@@ -19,3 +19,6 @@ srun --cpus-per-task "${SLURM_CPUS_PER_TASK:-1}" --export=ALL \
     input/Sscl1980-nuclear.fasta \
     input/Sscl1980-cds.fna \
     input/Sscl1980-mRNA.gtf
+
+
+awk -F '\t' '$9 ~ /transcript_biotype "mRNA"/' input/Sscl1980-mRNA.gtf > work/genes.gtf
