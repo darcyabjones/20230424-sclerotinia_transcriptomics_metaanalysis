@@ -6,6 +6,7 @@ GENOME_NAME=$1
 FASTA=$(realpath "$2")
 GFF=$(realpath "$3")
 VCF=$(realpath "$4")
+OUTDIR=$(realpath "$5")
 
 FASTA_BNAME="$(basename "${FASTA%.*}")"
 
@@ -29,7 +30,7 @@ bcftools norm \
     -o in.vcf \
     "${VCF}"
 
-VCF_NOGZ="${VCF%.gz}"
+VCF_NOGZ="${OUTDIR}/$(basename "${VCF%.gz}")"
 VCF_NOVCF="${VCF_NOGZ%.vcf}"
 VCF_NOBCF="${VCF_NOVCF%.bcf}"
 
@@ -47,6 +48,16 @@ bcftools view \
 
 bcftools index --tbi "${VCF_NOBCF}-split-snpeff.vcf.gz"
 
+if [ -f "snpEff_genes.txt" ]
+then
+  cp ./snpEff_genes.txt "${VCF_NOBCF}-split-snpeff_genes.txt"
+fi
+
+if [ -f "snpEff_summary.html" ]
+then
+  cp ./snpEff_summary.html "${VCF_NOBCF}-split-snpeff_summary.html"
+fi
+
 
 bcftools view -O v -o in.vcf "${VCF}"
 
@@ -63,3 +74,6 @@ bcftools view \
     out.vcf
 
 bcftools index --tbi "${VCF_NOBCF}-snpeff.vcf.gz"
+
+cp ./snpEff_genes.txt "${VCF_NOBCF}-snpeff_genes.txt"
+cp ./snpEff_summary.html "${VCF_NOBCF}-snpeff_summary.html"

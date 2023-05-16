@@ -66,7 +66,12 @@ vcf
 Here i'll extract locus level statistics and compute the quantiles.
 
 ```{r}
-INFO <- extract_info_tidy(vcf) %>% select(-END, -Key, -AC, -AF, -MLEAC, -MLEAF, -RAW_MQandDP)
+INFO <- extract_info_tidy(vcf) %>% select(
+  -END, -Key, -AC, -AF, -MLEAC, -MLEAF,
+  -RAW_MQandDP, -culprit, -ExcessHet, -InbreedingCoeff,
+  -NEGATIVE_TRAIN_SITE, -POSITIVE_TRAIN_SITE
+)
+
 INFO[["QUAL"]] <- as.numeric(vcf@fix[,"QUAL"])
 
 SUMMARY <- t(rbind(apply(

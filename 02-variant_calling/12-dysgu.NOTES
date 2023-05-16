@@ -1,0 +1,4 @@
+The sample for SRR14280050 could not complete within a reasonable time.
+I skipped analysis for these fastq files.
+
+Then when I ran the merging step, there were no sites.

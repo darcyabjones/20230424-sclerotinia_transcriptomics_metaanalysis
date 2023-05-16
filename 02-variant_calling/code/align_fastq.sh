@@ -2,9 +2,13 @@
 
 set -xeuo pipefail
 
+# Note here i'm using SRA as a general ID.
+# These isolates don't actually have SRA entries.
 SRA="$1"
 REFERENCE="$2"
-OUTDIR="${3:-output}"
+R1="$3"
+R2="${4:-}"
+OUTDIR="${5:-output}"
 
 mkdir -p "${OUTDIR}"
 mkdir -p "${OUTDIR}/"{falco,fastp,crams,bigwigs}
@@ -13,13 +17,10 @@ TMPPREFIX="work/.tmp${SRA}"
 mkdir -p "${TMPPREFIX}"
 trap "rm -rf -- '${TMPPREFIX}'" EXIT
 
-prefetch --progress --resume yes --verify yes --output-file "${TMPPREFIX}/${SRA}.sra" "${SRA}"
-fasterq-dump --progress --outdir "${TMPPREFIX}" "${TMPPREFIX}/${SRA}.sra"
-
-if [ -s "${TMPPREFIX}/${SRA}.fastq" ]
+if [ -z "${R2}" ] && [ -s "${R1}" ]
 then
   STRATEGY=SE
-elif [ -s "${TMPPREFIX}/${SRA}_1.fastq" ]
+elif [ -s "${R1}" ] && [ -s "${R2}" ]
 then
   STRATEGY=PE
 else
@@ -27,13 +28,14 @@ else
   exit 1
 fi
 
+
 if [ "${STRATEGY}" == "PE" ]
 then
-    falco --outdir "${OUTDIR}/falco/${SRA}_1" "${TMPPREFIX}/${SRA}_1.fastq"
-    falco --outdir "${OUTDIR}/falco/${SRA}_2" "${TMPPREFIX}/${SRA}_2.fastq"
+    falco --outdir "${OUTDIR}/falco/${SRA}_1" "${R1}"
+    falco --outdir "${OUTDIR}/falco/${SRA}_2" "${R2}"
     fastp \
-        --in1 "${TMPPREFIX}/${SRA}_1.fastq" \
-        --in2 "${TMPPREFIX}/${SRA}_2.fastq" \
+        --in1 "${R1}" \
+        --in2 "${R2}" \
         --out1 "${TMPPREFIX}/${SRA}_trimmed_1.fastq.gz" \
         --out2 "${TMPPREFIX}/${SRA}_trimmed_2.fastq.gz" \
         --qualified_quality_phred 5 \
@@ -43,8 +45,6 @@ then
         --html "${OUTDIR}/fastp/${SRA}-fastp.html" \
         -R "${SRA}" \
         --thread 3
-
-    rm -f "${TMPPREFIX}/${SRA}_1.fastq" "${TMPPREFIX}/${SRA}_2.fastq"
 else
     falco --outdir "${OUTDIR}/falco/${SRA}" "${TMPPREFIX}/${SRA}.fastq"
     fastp \
@@ -56,8 +56,6 @@ else
         --html "${OUTDIR}/fastp/${SRA}-fastp.html" \
         -R "${SRA}" \
         --thread 3
-
-    rm -f "${TMPPREFIX}/${SRA}.fastq"
 fi
 
 OUTCRAM="${OUTDIR}/crams/${SRA}.cram"

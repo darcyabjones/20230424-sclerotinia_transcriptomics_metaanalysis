@@ -11,16 +11,20 @@
 #SBATCH --job-name=snpeff
 
 module load system/Miniconda3
+source /home/djones/.bashrc && unset PERL5LIB && eval "$(conda shell.bash hook)"
 conda activate ./condaenv/
 
 set -euo pipefail
 
-REFERENCE_GENOME="$(realpath "input/Sscl1980-nuclear.fasta")"
+REFERENCE_GENOME="$(realpath "work/genome.fasta")"
 REFERENCE_GFF="$(realpath "input/Sscl1980-mRNA.gtf")"
-VCF="output/vqsr/filtered.vcf.gz"
+VCF="output/vqsr/final.vcf.gz"
+
+mkdir -p output/snpeff
 
 code/snpeff.sh \
     "Ss1980" \
     "${REFERENCE_GENOME}" \
     "${REFERENCE_GFF}" \
-    "${VCF}"
+    "${VCF}" \
+    output/snpeff

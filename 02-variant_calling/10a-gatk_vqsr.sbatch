@@ -11,17 +11,22 @@
 #SBATCH --job-name=filter_variants
 
 module load system/Miniconda3
+source /home/djones/.bashrc && unset PERL5LIB && eval "$(conda shell.bash hook)"
 conda activate ./condaenv/
 
 set -euo pipefail
 
-REFERENCE_GENOME="$(realpath "input/Sscl1980-nuclear.fasta")"
+REFERENCE_GENOME="$(realpath "work/genome.fasta")"
 KNOWN_VCF="output/round1/filtered.g.vcf.gz"
 INVCF="work/gatk_combine_round2.g.vcf.gz"
 
+
+mkdir -p output/vqsr
+mkdir -p work/vqsr
+
 gatk MakeSitesOnlyVcf \
     -I "${INVCF}" \
-    -O work/vqsr_sites_only.vcf.gz
+    -O work/vqsr/sites_only.vcf.gz
 
 # The --max-gaussians parameter sets the expected number of clusters in modeling.
 # If a dataset gives fewer distinct clusters, e.g. as can happen for smaller data,
@@ -29,18 +34,15 @@ gatk MakeSitesOnlyVcf \
 # message. In this case, try decrementing the --max-gaussians value.
 
 
-mkdir -p output/vqsr
-mkdir -p work/vqsr
-
 gatk --java-options "-Xmx7g -Xms7g" VariantRecalibrator \
-    -V work/vqsr_sites_only.vcf.gz \
+    -V work/vqsr/sites_only.vcf.gz \
     --trust-all-polymorphic \
     -tranche 100.0 -tranche 99.95 -tranche 99.9 -tranche 99.5 -tranche 99.0 -tranche 97.0 -tranche 96.0 -tranche 95.0 -tranche 94.0 -tranche 93.5 -tranche 93.0 -tranche 92.0 -tranche 91.0 -tranche 90.0 \
     -an FS -an ReadPosRankSum -an MQRankSum -an QD -an SOR -an DP \
     -mode INDEL \
     --max-gaussians 4 \
     -resource:bootstap,known=false,training=true,truth=true ${KNOWN_VCF} \
-    -O output/vqsr_indels.recal \
+    -O output/vqsr/indels.recal \
     --tranches-file output/vqsr/indels.tranches \
     --rscript-file output/vqsr/indels_plots.R
 

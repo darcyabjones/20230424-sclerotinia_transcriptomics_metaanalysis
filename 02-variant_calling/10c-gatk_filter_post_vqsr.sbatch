@@ -17,31 +17,79 @@ conda activate ./condaenv/
 set -euo pipefail
 
 REFERENCE_GENOME="$(realpath "input/Sscl1980-nuclear.fasta")"
-WORKDIR="${PWD}/work/filter_round1"
-OUTDIR="${PWD}/output/round1"
+WORKDIR="${PWD}/work/vqsr"
+OUTDIR="${PWD}/output/vqsr"
 mkdir -p "${OUTDIR}" "${WORKDIR}"
 
 bcftools filter \
-    --include '(INFO/DP <= 2574) && (INFO/DP >= 356) && (INFO/MQ >= 50) && (INFO/QD >= 10) && (INFO/FS <= 10) && (INFO/SOR <= 2.5) && (INFO/MQRankSum >= -2.5) && (INFO/ReadPosRankSum >= -5)' \
+    --exclude '(INFO/DP > 4000)' \
+    --soft-filter DP_TOO_HIGH \
+    -O u \
+    "${WORKDIR}/SNP.g.vcf.gz" \
+| bcftools filter \
+    --exclude '(INFO/DP < 4)' \
+    --soft-filter DP_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/MQ < 50)' \
+    --soft-filter MQ_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/QD < 5)' \
+    --soft-filter QD_TOO_LOW \
     -O z \
     -o "${WORKDIR}/SNP-filtered.g.vcf.gz" \
-    "${WORKDIR}/SNP.g.vcf.gz"
+    -
 
 bcftools index "${WORKDIR}/SNP-filtered.g.vcf.gz"
 
 bcftools filter \
-    --include '(INFO/DP <= 2565) && (INFO/DP >= 617) && (INFO/MQ >= 40) && (INFO/QD >= 10) && (INFO/FS <= 25) && (INFO/SOR <= 5) && (INFO/MQRankSum >= -2.5) && (INFO/ReadPosRankSum >= -5)' \
+    --exclude '(INFO/DP > 3500)' \
+    --soft-filter DP_TOO_HIGH \
+    -O u \
+    "${WORKDIR}/INDEL.g.vcf.gz" \
+| bcftools filter \
+    --exclude '(INFO/DP < 4)' \
+    --soft-filter DP_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/MQ < 50)' \
+    --soft-filter MQ_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/QD < 5)' \
+    --soft-filter QD_TOO_LOW \
     -O z \
     -o "${WORKDIR}/INDEL-filtered.g.vcf.gz" \
-    "${WORKDIR}/INDEL.g.vcf.gz"
+    -
 
 bcftools index "${WORKDIR}/INDEL-filtered.g.vcf.gz"
 
 bcftools filter \
-    --include '(INFO/DP <= 2598) && (INFO/DP >= 718) && (INFO/MQ >= 50) && (INFO/QD >= 10) && (INFO/FS <= 25) && (INFO/SOR <= 2.5) && (INFO/MQRankSum >= -2.5) && (INFO/ReadPosRankSum >= -4)' \
+    --exclude '(INFO/DP > 3500)' \
+    --soft-filter DP_TOO_HIGH \
+    -O u \
+    "${WORKDIR}/MIXED.g.vcf.gz" \
+| bcftools filter \
+    --exclude '(INFO/DP < 4)' \
+    --soft-filter DP_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/MQ < 50)' \
+    --soft-filter MQ_TOO_LOW \
+    -O u \
+    - \
+| bcftools filter \
+    --exclude '(INFO/QD < 5)' \
+    --soft-filter QD_TOO_LOW \
     -O z \
     -o "${WORKDIR}/MIXED-filtered.g.vcf.gz" \
-    "${WORKDIR}/MIXED.g.vcf.gz"
+    -
 
 bcftools index "${WORKDIR}/MIXED-filtered.g.vcf.gz"
 
@@ -69,12 +117,11 @@ bcftools concat \
     - \
 | bcftools view \
    --trim-alt-alleles --min-alleles 2 \
-   -f .,PASS \
    -Ou \
    - \
 | bcftools sort \
    -Oz \
-   -o "${OUTDIR}/filtered.g.vcf.gz" \
+   -o "${OUTDIR}/final.vcf.gz" \
    -
 
-bcftools index --tbi "${OUTDIR}/filtered.g.vcf.gz"
+bcftools index --tbi "${OUTDIR}/final.vcf.gz"
