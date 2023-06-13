@@ -1,0 +1,183 @@
+---
+title: "13-vcfr"
+output: html_document
+date: "2023-05-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 13-vcfr
+
+In this notebook we'll apply some final filtering, compute some simple trees, and briefly look at any structure.
+I don't expect to be doing much popgen with this work.
+
+
+```{r}
+library(vcfR)
+library(tidyverse)
+```
+
+So we have out metadata
+
+```{r}
+reseq <- readr::read_tsv("input/resequencing.tsv")
+
+# There are a couple that didn't have SRA numbers
+# So i made temporary ids for them.
+reseq[["id"]] <- reseq[["sra"]]
+reseq[reseq$accession == "Sscl-Lang", "id"] <- "SSCLLANG"
+reseq[reseq$accession == "Sscl-Lmut", "id"] <- "SSCLLMUT"
+reseq[reseq$accession == "LC41", "id"] <- "SSCLLC41"
+tail(reseq)
+```
+
+First, i know that there are a few isolates that aren't sclerotinia sclerotiorum.
+
+```{r}
+reseq %>% filter(organism != "Sclerotinia sclerotiorum")
+```
+
+These will serve as an outgroup later.
+
+```{r}
+# These are not Sclerotiorum
+non_sclerotiorum <- c("SRR8608049", "ERR4705209", "SSCLLC41")
+```
+
+Now i'm loading the variants.
+I'll apply the filters that are already in the data.
+Normally i'd keep them a soft-filtered variants, but it'll be easier for everyone not to have to worry about that.
+We can check with the original one later if we need to.
+
+```{r}
+vcf <- read.vcfR(file = "output/snpeff/final-snpeff.vcf.gz")
+vcf <- vcf[vcf@fix[, "FILTER"] == "PASS" | vcf@fix[, "FILTER"] == "."]
+vcf
+```
+
+So, we've got ~350k variant loci.
+
+```{r}
+# These isolates are accidental duplicates
+vcf@gt <- vcf@gt[, !attr(vcf@gt, "dimnames")[[2]] %in% c("SRR8485440", "SRR8485438", "SRR8485439", "SRR8485442")]
+vcf
+```
+
+First i'll say that any variants with low DP are not assigned. 
+
+```{r}
+dp <- extract.gt(vcf, element = "DP", as.numeric=TRUE)
+vcf@gt[dp < 4] <- NA
+```
+
+Here's a plot of the amount of missing data per sample.
+
+```{r}
+dp <- extract.gt(vcf, element = "DP", as.numeric=TRUE)
+barplot(apply(is.na(dp), MARGIN = 2, FUN = function(x) sum(x, na.rm = TRUE)) / nrow(dp))
+```
+
+Most are below 0.4 and all below 0.5, even including the non-sclerotiorum isolates.
+That's not too bad.
+
+Normally i'd be harder on threshold for phylogenetics, but we'll go harder later on.
+
+
+Now let's see how many variants have lots of missing data.
+
+```{r}
+hist(apply(is.na(dp), MARGIN = 1, FUN = function(x) sum(x, na.rm = TRUE)) / ncol(dp))
+```
+
+So about half of our loci are almost all missing data.
+We can remove those loci pretty easily by setting a missing data threshold of 0.5.
+
+```{r}
+vcf <- vcf[(apply(is.na(dp), MARGIN = 1, FUN = function(x) sum(x, na.rm = TRUE)) / ncol(dp)) < 0.5]
+vcf
+```
+
+Let's look at missing data per isolate again.
+
+```{r}
+dp <- extract.gt(vcf, element = "DP", as.numeric=TRUE)
+barplot(apply(is.na(dp), MARGIN = 2, FUN = function(x) sum(x, na.rm = TRUE)) / nrow(dp))
+```
+
+Much better.
+Again, we've got a few with more missing data, but it's really not that much considering they're different species.
+
+After setting things with DP < 4 to NA, we might have some loci that are all the same loci that are all reference genotype.
+Here i'm removing those loci.
+
+
+```{r}
+gt <- extract.gt(vcf, element = "GT", as.numeric=TRUE)
+vcf <- vcf[!apply(gt == 0, MARGIN = 1, FUN = function(x) all(x, na.rm = TRUE))]
+vcf
+```
+
+It was ~10k loci.
+
+Let's see how many loci are the same as the reference per-isolate.
+
+```{r}
+gt <- extract.gt(vcf, element = "GT", as.numeric=TRUE)
+sort(apply((gt == 0), MARGIN = 2, FUN = function(x) sum(x, na.rm = TRUE)))
+```
+
+
+
+```{r}
+mat <- as.data.frame(as.matrix(gt))
+mat[["SS1980"]] <- 0
+mat <- as.data.frame(t(mat))
+mat <- rownames_to_column(mat, var = "id")
+
+mat <- mat[mat$id != "SRR8485440", ]
+mat <- mat[mat$id != "SRR8485438", ]
+mat <- mat[mat$id != "SRR8485439", ]
+mat <- mat[mat$id != "SRR8485442", ]
+
+mat <- left_join(
+  mat,
+  reseq %>% select(id, accession),
+  by = "id"
+)
+
+mat[mat$id == "SS1980", "accession"] <- "SS1980"
+#mat[is.na(mat$id), "id"] <- mat[is.na(mat$id), "id"]
+
+mat <- as.data.frame(mat)
+row.names(mat) <- mat$accession
+mat <- mat %>% select(-id, -accession)
+
+d <- dist(mat)
+
+hcl <- hclust(d)
+plot(hcl)
+```
+
+Slightly concerningly, the 3 non-sclero isolates are placed pretty close to 1980 and Ss45.
+
+```{r}
+unlist(reseq[reseq$organism != "Sclerotinia sclerotiorum", "accession"])
+```
+
+```{r}
+reseq[reseq$accession == "Ss45", ]
+```
+
+There are a lot of things that might be causing this problem, so I won't worry too much just yet.
+We'll select more strictly if we create a tree, which should avoid selective issues.
+
+```{r}
+write.vcf(vcf, "output/vcfr-filtered.vcf.gz")
+```
+
+
+```{r}
+sessionInfo()
+```
