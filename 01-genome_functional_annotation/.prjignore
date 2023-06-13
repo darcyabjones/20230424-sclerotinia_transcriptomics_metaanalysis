@@ -8,3 +8,5 @@
 ^NOTES.txt
 work/.*
 input/sra_rnaseq\.tsv
+Sscl1980-protein\.faa\.gz
+input/Sscl1980-mRNA\.gff3\.gz

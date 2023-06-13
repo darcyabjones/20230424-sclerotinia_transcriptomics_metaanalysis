@@ -19,10 +19,15 @@
 *.log
 *.stderr
 *.stdout
+*.nextflow.log*
+slurm*.out
 
 **/multiqc_data
 **/multiqc_report.html
 **/condaenv
+**/predector_condaenv
+**/deeploc2_env
+**/.nextflow
 
 **/backup
 **/output
@@ -38,6 +43,10 @@
 **/jbrowse2/umd_plugin.js
 **/jbrowse2/version.txt
 
+01-genome_functional_annotation/envs/deeploc2_package/
+01-genome_functional_annotation/envs/predector
+01-genome_functional_annotation/envs/sources
+01-genome_functional_annotation/results
 
 !jbrowse2/config.json
 !input/reference_genome/*

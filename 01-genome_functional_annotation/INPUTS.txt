@@ -1,0 +1,22 @@
+
+## Added input at 20230612-091601
+
+proteins
+
+```
+cp ../input/reference_genome/Sscl1980-protein.faa.gz ./input
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-protein.faa.gz (sha256:b2e286b4d6b6de3dc74552ce54a8f1a3d6991b7655799d6d0e6becc970a48cda)
+
+## Added input at 20230612-091858
+
+proteins
+
+```
+cp ../input/reference_genome/Sscl1980-mRNA.gff3.gz input/
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-mRNA.gff3.gz (sha256:0deadcb688d71158beaa822562797e48e1d03cf3490c18d69d9842ef2f622a12)
