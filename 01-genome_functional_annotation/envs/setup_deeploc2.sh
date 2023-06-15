@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+module load system/Python-3.11.1
+
 #cd envs
 
 #tar -zxf sources/deeploc-2.0.All.tar.gz
@@ -11,7 +13,7 @@
 
 #cd -
 
-#python3 -m venv deeploc2_env
+python3 -m venv deeploc2_env
 source deeploc2_env/bin/activate
 
 python3 -m pip install wheel

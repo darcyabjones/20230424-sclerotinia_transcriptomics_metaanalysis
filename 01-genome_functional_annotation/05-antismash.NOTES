@@ -1,0 +1,4 @@
+I ran the sclerotinia genome on the fungismash v7.0.0 webserver https://fungismash.secondarymetabolites.org/.
+I provided the genome and gene predictions, and specified to run all extra analysis, but not the boundary refinement based on TFBS prediction.
+
+I downloaded the complete results to output/fungismash.zip

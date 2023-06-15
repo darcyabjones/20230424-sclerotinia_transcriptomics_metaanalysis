@@ -20,6 +20,7 @@
 *.stderr
 *.stdout
 *.nextflow.log*
+*.sif
 slurm*.out
 
 **/multiqc_data
@@ -45,8 +46,11 @@ slurm*.out
 
 01-genome_functional_annotation/envs/deeploc2_package/
 01-genome_functional_annotation/envs/predector
+01-genome_functional_annotation/envs/predector-utils
 01-genome_functional_annotation/envs/sources
 01-genome_functional_annotation/results
+01-genome_functional_annotation/gffpal_env
+01-genome_functional_annotation/tmbed_condaenv
 
 !jbrowse2/config.json
 !input/reference_genome/*

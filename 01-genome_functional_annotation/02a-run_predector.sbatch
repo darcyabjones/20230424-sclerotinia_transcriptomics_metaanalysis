@@ -13,15 +13,15 @@ module load system/Miniconda3
 source /home/djones/.bashrc
 unset PERL5LIB
 eval "$(conda shell.bash hook)"
-conda activate ./predector_condaenv
+conda activate ./condaenv
 
 nextflow run \
   -resume \
-  -with-conda "${PWD}/predector_condaenv" \
+  -with-conda "${PWD}/predector_condaenv"  \
   -w work/predector_work \
   -ansi-log false \
   envs/predector/main.nf \
-    -profile genotoul \
+    -profile c16,r64 \
     --proteome work/Sscl1980.faa \
     --outdir work/predector_results
   

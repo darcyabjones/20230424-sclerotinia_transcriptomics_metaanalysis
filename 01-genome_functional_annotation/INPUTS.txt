@@ -20,3 +20,18 @@ cp ../input/reference_genome/Sscl1980-mRNA.gff3.gz input/
 
 Code has touched these files:
 - NEW: input/Sscl1980-mRNA.gff3.gz (sha256:0deadcb688d71158beaa822562797e48e1d03cf3490c18d69d9842ef2f622a12)
+
+## Added input at 20230615-094139
+
+adding genomoe index needed to create bigwig files
+
+```
+cp ../input/reference_genome/Sscl1980-nuclear.fasta.gz.fai input
+```
+
+Code has touched these files:
+- NEW: input/Sscl1980-nuclear.fasta.gz.fai (sha256:b8ad718f888e6640f1efc2bc723a97883df90f6db4ae088944154320a09bf0e2)
+- MODIFIED: output/predector_genome/Scscl_1980-proteins.gff3.gz (sha256:5ad823a5fb24b587162c2e076086bdda7eea4ad5f283deab4c19cd8fb0b6429e)
+- MODIFIED: output/predector_genome/Scscl_1980-proteins.gff3.gz.gzi (sha256:75c427efaa1f573765e3e90ef07d8c749dbc3dbca2881a88adff0b27f0d575b2)
+- MODIFIED: output/predector_genome/Scscl_1980-proteins.gff3.gz.tbi (sha256:a4c931075d7f86fc4991b3420c3f6e9f14f1a78999b1573449d73cb79740721a)
+- MODIFIED: slurm-48964221.out (sha256:59e2df337ad4c25aa93a3c515f3b35652fbbbbd78e8b433b5230d8d2ef078d27)

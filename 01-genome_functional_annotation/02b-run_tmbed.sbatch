@@ -10,7 +10,7 @@
 module load system/Miniconda3
 
 source /home/djones/.bashrc && eval "$(conda shell.bash hook)"
-conda activate ./predector_condaenv
+conda activate ./tmbed_condaenv/
 
 set -euo pipefail
 
@@ -18,5 +18,5 @@ export TMPDIR="work/tmp$$"
 mkdir -p "${TMPDIR}"
 trap 'rm -rf -- ${TMPDIR}' EXIT
 
-tmbed embed -f work/Sscl1980.faa -e output/t5_embeddings.h5
+#tmbed embed -f work/Sscl1980.faa -e output/t5_embeddings.h5
 tmbed predict -f work/Sscl1980.faa -e output/t5_embeddings.h5 -p output/tmbed.3line --out-format 0
