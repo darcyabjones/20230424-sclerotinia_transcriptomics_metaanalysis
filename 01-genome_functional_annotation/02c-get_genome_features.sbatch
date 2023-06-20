@@ -10,16 +10,12 @@
 
 mkdir -p work
 
-echo "here"
 module load system/Miniconda3
-echo "here"
 #source /home/djones/.bashrc
 unset PERL5LIB
 eval "$(conda shell.bash hook)"
-echo "here"
 conda activate ./condaenv
 
-echo "here"
 set -euo pipefail
 
 #cp input/Sscl1980-mRNA.gff3.gz work
@@ -46,11 +42,13 @@ set -euo pipefail
 
 #cp -r work/predector_results/ output/predector_protein
 
-predutils map_to_genome --split "source" -o "output/predector_genome/" work/Sscl1980-mRNA.gff3 output/predector_protein/Scscl_1980-proteins.gff3
-predutils scores_to_genome --outfile output/predector_genome/Sscl1980-proteins.bedgraph  work/Sscl1980-mRNA.gff3 output/predector_protein/Scscl_1980-proteins-ranked.tsv
+#predutils map_to_genome --split "source" -o "output/predector_genome/" work/Sscl1980-mRNA.gff3 output/predector_protein/Scscl_1980-proteins.gff3
+#predutils scores_to_genome --outfile output/predector_genome/Sscl1980-proteins.bedgraph  work/Sscl1980-mRNA.gff3 output/predector_protein/Scscl_1980-proteins-ranked.tsv
 
-for f in output/predector_genome/*.gff3
-do
-  code/tabix_gff3.sh "$f" "${f}.gz"
-done
-code/multibedgraph_to_bigwig.sh input/Sscl1980-nuclear.fasta.gz.fai output/predector_genome/Sscl1980-proteins.bedgraph "output/predector_genome/"
+#for f in output/predector_genome/*.gff3
+#do
+#  code/tabix_gff3.sh "$f" "${f}.gz"
+#done
+
+sed 's/NA/0/g' output/predector_genome/Sscl1980-proteins.bedgraph > work/Sscl1980-proteins.bedgraph
+code/multibedgraph_to_bigwig.sh input/Sscl1980-nuclear.fasta.gz.fai work/Sscl1980-proteins.bedgraph "output/predector_genome/"
