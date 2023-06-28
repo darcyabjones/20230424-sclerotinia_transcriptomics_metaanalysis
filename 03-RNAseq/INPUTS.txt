@@ -35,3 +35,14 @@ zcat ../input/reference_genome/Sscl1980-cds.fna.gz > input/Sscl1980-cds.fna
 
 Code has touched these files:
 - NEW: input/Sscl1980-cds.fna (sha256:537070180c8f7603e13a6d1b3d13981a2df828bb2f4dffd74b176a5818af6355)
+
+## Added input at 20230622-161556
+
+Adding new rnaseq metadata. Keeping old one so that older steps work unchanged.
+
+```
+mv sra_rnaseq2.tsv input
+```
+
+Code has touched these files:
+- NEW: input/sra_rnaseq2.tsv (sha256:2aebadb931b8b8e66d31d7ad1d4ef225ac08d8810dbd26dfca022d79a16a2e56)

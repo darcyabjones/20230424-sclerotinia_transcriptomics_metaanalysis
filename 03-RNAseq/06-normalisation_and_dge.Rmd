@@ -1,0 +1,1805 @@
+---
+title: "06-normalisation_and_dge"
+output: html_document
+date: "2023-06-20"
+---
+
+In this notebook we'll be looking at the gene-level count data from the RNA-seq.
+We'll perform DGE tests for each bioproject separately, look at combining DGE related results using p-value metaanalysis, and look at normalising counts for downstream co-expression analysis.
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+The first think is to load the data and see what we're dealing with.
+
+```{r}
+library(tidyverse)
+library(ruv)
+library(DESeq2) # bioconductor
+library(vsn) # bioconductor
+library(edgeR) # bioconductor
+library(ggplot2)
+library(ggrepel)
+library(ggExtra)
+library(scales)
+library(HTSFilter)
+library(sva)
+
+library(ComplexHeatmap) # bioconductor
+```
+
+
+```{r}
+ggplot2::theme_set(ggplot2::theme_bw() +
+  ggplot2::theme(
+    strip.background = element_rect(
+     color="black", fill="white", linewidth=0, linetype="solid"
+    ),
+    rect = element_rect(
+      colour = "black",
+      linewidth = 1,
+      linetype = "solid"
+    )
+  )
+)
+
+okabe <- c('#000000', '#E69F00', '#56B4E9', '#009E73', '#F0E042', '#0072B2', '#D55E00', '#CC79A7', '#999999')
+options(ggplot2.discrete.fill = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+options(ggplot2.discrete.colour = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+
+gg_shape <- function(gg, vals) {gg + scale_shape_manual(values = rep(c(15, 17:20), 100))}
+```
+
+
+```{r}
+counts_raw <- readr::read_delim("output/feature_counts.tsv", delim = "\t") %>%
+  mutate(Geneid = str_remove(Geneid, "gene-"))
+head(counts_raw)
+```
+
+```{r}
+counts <- counts_raw %>%
+  mutate(id=Geneid) %>%
+  select(-Chr, -Start, -End, -Strand, -Length, -Geneid)
+
+# There must be a more elegant way to do this...
+counts <- counts[, c("id", colnames(counts)[colnames(counts) != "id"])]
+head(counts)
+```
+
+
+```{r}
+meta <- readr::read_delim("input/sra_rnaseq2.tsv", delim = "\t", na = "-") %>%
+  mutate(
+    host_ = paste0(host_tidyname, host_accession_tidyname),
+    organism_ = paste0(organism_tidyname, accession_tidyname),
+  ) %>%
+  filter(organism != "Sclerotinia trifoliorum")
+
+head(meta)
+```
+
+OK. The data is in, let's look at the counts.
+
+```{r, fig.height=8, fig.width=14}
+ggplot(meta, aes(x=sra, y=n_fragments_aligned, fill=included)) +
+  geom_bar(stat="identity") +
+  facet_wrap(vars(bioproject), scales="free")
+```
+
+So you should see that there are several bioprojects that I've excluded on the basis of multimapping reads, generally low read coverage, etc.
+The samples labelled "network only" are excluded from DGE because they are unreplicated. However they may be of interest to identify co-expressed genes.
+
+You should also see that we have a pretty wide range of coverage.
+Typically the most dramatic differences are between samples in planta and in vitro.
+
+Sometimes a biological treatment will be split across multiple sequencing runs.
+I'll check for this now.
+
+```{r}
+multi_biosample <- meta %>% group_by(biosample) %>% summarise(n = n_distinct(sra)) %>% filter(n > 1) %>% .[["biosample"]]
+
+for (m in multi_biosample) {
+  print(meta[meta$biosample == m, ])
+}
+```
+
+Ok. So these all seem to be treatment replicates. I'm not going to worry about combining any counts.
+
+We'll exclude any samples that we aren't going to keep right now.
+And I want to convert the table to a long format which i can use to select subsets very easily.
+
+```{r}
+meta <- meta[meta$included %in% c("TRUE", "NETWORK_ONLY"), ]
+
+lcounts <- dplyr::inner_join(
+  meta,
+  tidyr::pivot_longer(counts, -id, names_to = "sra", values_to = "count"),
+  by = "sra"
+) %>% mutate(cpm = count / (n_fragments_aligned / 1000000)) %>%
+  select(-platform, -read_length, -strategy, -stranded, -n_fragments, -n_fragments_filtered, -n_fragments_aligned, -n_fragments_aligned_single, -n_fragments_aligned_multi, -notes, -DOI, -biosample)
+
+head(lcounts)
+```
+
+
+Let's have a look at some PCA plots.
+
+```{r}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = cpm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+pca_raw <- princomp(tmp, fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev[1:10])) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+The first PC explains a fairly large amount of variance.
+I wasn't expecting to get much reduction in this dataset.
+
+```{r}
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+head(pca)
+```
+
+
+```{r, fig.width = 4.75, fig.height = 3.5}
+gg <- ggplot(pca, aes(x=PC01, y=PC02, color=host_tidyname, shape=host_tidyname, fill=host_tidyname)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg <- gg_shape(gg, pca$host_tidyname)
+print(gg)
+
+gg <- ggplot(pca, aes(x=PC03, y=PC04, color=host_tidyname, fill=host_tidyname, shape=host_tidyname)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg <- gg_shape(gg, pca$host_tidyname)
+gg
+```
+
+Well, the first and second axes seem to be picking something up with B. napus samples, and maybe some unusual in-vitro samples.
+It looks like the B. napus samples are going to be dominating the data.
+Possibly just because there's more of it.
+
+```{r, fig.width = 6.25, fig.height = 3.5}
+gg <- ggplot(pca, aes(x=PC01, y=PC02, color=bioproject, fill=bioproject, shape=bioproject)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg <- gg_shape(gg, pca$bioproject)
+print(gg)
+
+gg <- ggplot(pca, aes(x=PC03, y=PC04, color=bioproject, fill=bioproject, shape=bioproject)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg <- gg_shape(gg, pca$bioproject)
+print(gg)
+```
+
+It does seem that the little clusters are at least coming from the same bioprojects, which is encouraging.
+Maybe a heatmap would be nice to show how the different experiments are (dis)similar.
+
+
+```{r}
+# Utility function from https://jokergoo.github.io/2020/05/11/set-cell-width/height-in-the-heatmap/
+calc_ht_size = function(ht, unit = "inches") {
+    pdf(NULL)
+    ht = draw(ht)
+    w = ComplexHeatmap:::width(ht)
+    w = convertX(w, unit, valueOnly = TRUE)
+    h = ComplexHeatmap:::height(ht)
+    h = convertY(h, unit, valueOnly = TRUE)
+    dev.off()
+
+    c(w, h)
+}
+```
+
+We'll look at clustering the samples to see if natural groups fall out from a correlation matrix.
+
+```{r, fig.width=12.03533, fig.height=8.11880}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = cpm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+tmp <- log(tmp + 1, base = 2)
+
+tmp_cor <- cor(tmp)
+tmp_dist <- as.dist(1 - tmp_cor)
+hcl <- hclust(tmp_dist, method = "average")
+
+srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[srrs, "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[srrs, "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = hcl,
+  cluster_columns = hcl,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_clustered.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+So you can see from the top-colour bar that the clusters are a mixture of bioprojects and hosts.
+Host tends to form larger blocks, but not all samples from the same host are positioned together.
+
+Next we'll look at an unclustered matrix, so samples from the same bioproject should occur together.
+
+```{r, fig.width=11.62194, fig.height=8.11880}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = cpm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+tmp <- log(tmp + 1, base = 2)
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_bioproject.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+And finally we'll look at host.
+
+
+```{r, fig.width=11.62194, fig.height=8.11880}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = cpm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+tmp <- log(tmp + 1, base = 2)
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+There are a couple of good clusters there.
+It looks like the Lettuce (Lactuca sativa) samples are all well correlated.
+We'll see i guess.
+
+## Differential gene expression
+
+
+So i'm going to need to process each experiment separately.
+Which means some quick PCA, dispersion, and applying the contrasts.
+To save time i'll try to automate as much as I can.
+
+We'll use DESeq2, which is my favourite as it handles genes with low counts better than EdgeR.
+
+Here are the different bioprojects.
+
+```{r}
+unique(meta$bioproject)
+```
+
+
+
+```{r}
+plotPCA2 <- function(dds, f1, f2) {
+  pcaData <- plotPCA(
+    dds,
+    ntop = 1000,
+    intgroup = c(f1, f2),
+    returnData = TRUE
+  )
+
+  percentVar <- round(100 * attr(pcaData, "percentVar"))
+
+  gg <- ggplot(pcaData, aes(x = PC1, y = PC2, color = .data[[f1]], shape = .data[[f2]])) +
+    geom_point(size=3, alpha=0.75) +
+    xlab(paste0("PC1: ", percentVar[1], "% variance")) +
+    ylab(paste0("PC2: ", percentVar[2], "% variance"))
+  
+  gg <- gg_shape(gg, pcaData[[f2]])
+  return(gg)
+}
+
+# Converts 0 to the smallest possible number before log calc
+get_log <- function(vec){
+  vec[vec == 0] <- .Machine$double.xmin
+  vec <- -log10(vec)
+}
+
+reverselog_trans <- function(base = exp(1)) {
+    trans <- function(x) -log(x, base)
+    
+    inv <- function(x) base^(-x)
+    trans_new(paste0("reverselog-", format(base)), trans, inv, 
+              log_breaks(base = base), 
+              domain = c(1e-100, Inf))
+}
+
+
+plot_volcano <- function(df, title=NA, nlabels = 5, padj_threshold = 0.05) {
+  df <- df[!is.na(df$padj), ]
+
+  df_up <- df[(df$log2FoldChange > 0),]
+  df_up <- df_up[order(df_up$padj),]
+
+  df_up$label <- NA
+  df_up$label[1:nlabels] <- rownames(df_up)[1:nlabels]
+
+  df_down <- df[(df$log2FoldChange <= 0),]
+  df_down <- df_down[order(df_down$padj),]
+  df_down$label <- NA
+  df_down$label[1:nlabels] <- rownames(df_down)[1:nlabels]
+
+  df <- rbind(df_up, df_down)
+  
+  gg <- df %>%
+    as.data.frame() %>%
+    ggplot(aes(y=padj, x=log2FoldChange, colour=padj < padj_threshold, label = label)) +
+    geom_text_repel(colour="black", box.padding=0.3, min.segment.length = 0, size=3) +
+    geom_point(alpha=0.5) +
+    scale_y_continuous(trans = reverselog_trans(10)) +
+    ylab("adjusted p-value") +
+    xlab(expression(paste(log[2] * " FC"))) +
+    labs(colour=paste0("adj. p < ", padj_threshold)) +
+
+  if ( !is.na(title) ) {
+    gg <- gg + ggtitle(title)
+  }  
+
+  gg <- ggMarginal(gg, margins = "x", type="histogram", fill="lightgrey", xparams = list(bins = 100, linewidth = 0.25, fill = "black"), size=4)
+
+  return(gg)
+}
+
+
+process_contrast_mat <- function(bpr, contrasts, this_meta) {
+  colnames(contrasts) <- c("sample1", "sample2", "contrast_group")
+  contrasts <- as.data.frame(contrasts)
+  contrasts["contrast"] <- apply(contrasts, MARGIN = 1, FUN = function(x) {paste0(x["sample1"], "_vs_", x["sample2"])})
+  contrasts["bioproject"] <- bpr
+  contrasts <- dplyr::left_join(
+    contrasts,
+    this_meta %>% select(sample1 = sample, host1 = host_tidyname, hpi1 = hpi) %>% unique(),
+    by="sample1"
+  )
+  
+  contrasts <- dplyr::left_join(
+    contrasts,
+    this_meta %>% select(sample2 = sample, host2 = host_tidyname, hpi2 = hpi) %>% unique(),
+    by="sample2"
+  )
+  
+  contrasts <- contrasts[, c('contrast_group', 'bioproject', 'contrast', 'sample1', 'sample2', 'host1', 'hpi1', 'host2', 'hpi2')]
+  return(contrasts)
+}
+
+
+run_deg_tests <- function(lcounts, contrasts, bpr, norm_only = FALSE, exclude = NULL) {
+  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+    column_to_rownames("id") %>%
+    as.matrix()
+  
+  all(rownames(this_meta) == colnames(this_counts))
+  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
+  
+  dds <- DESeqDataSetFromMatrix(
+    countData = this_counts,
+    colData = this_meta_,
+    design = ~ sample
+  )
+  
+  ncounts <- assay(rlog(dds, blind = FALSE))
+  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
+  
+  if (norm_only) {
+    return(list("norm_counts" = ncounts))
+  }
+  
+  if (!is.null(exclude)) {
+    this_counts <- lcounts %>% filter(bioproject == bpr) %>% filter(!sra %in% exclude) %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+      column_to_rownames("id") %>%
+      as.matrix()
+    
+    all(rownames(this_meta) == colnames(this_counts))
+    this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
+    
+    dds <- DESeqDataSetFromMatrix(
+      countData = this_counts,
+      colData = this_meta_,
+      design = ~ sample
+    )
+  }
+  
+  dds_results <- DESeq(dds, test = "Wald")
+  filter <- HTSFilter(dds_results, plot = TRUE, s.len=100)$filteredData
+  
+  # Normally i prefer to run lfcThreshold=1, but the meta analysis methods require a uniform p-value
+  # distribution, and thresholded tests yield a big peak around pvalue=1.
+  tests <- apply(
+    contrasts,
+    MARGIN = 1,
+    FUN = function(x) {results(dds_results, contrast = c("sample", x["sample1"], x["sample2"]), alpha = 0.01, lfcThreshold = 0, independentFiltering=FALSE)}
+  )
+  names(tests) <- contrasts$contrast
+  
+  gg <- do.call(
+    rbind,
+    lapply(names(tests), FUN=function(n) {data.frame(contrast=n, pvalue=tests[[n]]$pvalue)})
+  ) %>%
+    ggplot(aes(x=pvalue)) +
+    geom_histogram() +
+    facet_wrap(vars(contrast))
+
+  print(gg)
+
+  mapper <- function(t) {
+    t2 <- as.data.frame(t) %>% summarise(
+      up = sum((log2FoldChange > 0) & (padj < 0.05), na.rm = TRUE),
+      down = sum((log2FoldChange < 0) & (padj < 0.05), na.rm = TRUE),
+      zerocounts = sum(baseMean == 0, na.rm = TRUE),
+      n = n()
+    )
+    return(t2)
+  }
+  
+  # After HTSfilter these stats are no longer relevant
+  #lowcount_threshold = t@metadata$filterThreshold,
+  #lowcounts = sum(baseMean < t@metadata$filterThreshold, na.rm = TRUE),
+  
+  print(do.call(rbind, lapply(tests, mapper)))
+
+  return(list("norm_counts" = ncounts, "tests" = tests))
+}
+
+run_count_norm <- function(lcounts, bpr) {
+  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+    column_to_rownames("id") %>%
+    as.matrix()
+  
+  all(rownames(this_meta) == colnames(this_counts))
+  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
+  
+  dds <- DESeqDataSetFromMatrix(
+    countData = this_counts,
+    colData = this_meta_,
+    design = ~ 1
+  )
+  
+  ncounts <- assay(rlog(dds, blind = TRUE))
+  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
+  
+  return(list("norm_counts" = ncounts))
+}
+```
+
+
+
+```{r}
+all_contrasts <- list()
+norm_counts <- list()
+deg_results <- list()
+```
+
+
+
+### PRJNA261444
+
+```{r}
+bpr <- "PRJNA261444"
+this_meta <- meta %>% filter(bioproject == bpr)
+# this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_12hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_12hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_24hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_24hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_48hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_48hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_12hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_12hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_24hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_24hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_48hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_48hpi", "IPvsIV",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_24hpi", "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_12hpi", "MvsE",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_12hpi", "LvsE",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_24hpi", "LvsE",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_24hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_12hpi", "MvsERes",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_12hpi", "LvsERes",
+  "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_24hpi", "LvsMRes",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_12hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_12hpi", "SuscvsRes",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_24hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_24hpi", "SuscvsRes",
+  "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_48hpi", "SuscvsRes"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA327437"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_1hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_3hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_6hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_12hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_12hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_1hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_1hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_1hpi", "LvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_12hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_3hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_3hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_3hpi", "LvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_12hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_6hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_6hpi", "MvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_6hpi", "LvsE",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_12hpi", "LvsM",
+  "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "LvsM"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA341340"
+this_meta <- meta %>% filter(bioproject == bpr)
+# this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA341340_Sscl1980_lesion_Slys", "PRJNA341340_Sscl1980_ball_IVPDB", "IPvsIV",
+  "PRJNA341340_Sscl1980_lesion_Hann", "PRJNA341340_Sscl1980_ball_IVPDB", "IPvsIV",
+  "PRJNA341340_Sscl1980_lesion_Atha", "PRJNA341340_Sscl1980_ball_IVPDB", "IPvsIV",
+  "PRJNA341340_Sscl1980_lesion_Slys", "PRJNA341340_Sscl1980_lesion_Hann", "SlysvsHann",
+  "PRJNA341340_Sscl1980_lesion_Slys", "PRJNA341340_Sscl1980_lesion_Atha", "SlysvsAtha",
+  "PRJNA341340_Sscl1980_lesion_Hann", "PRJNA341340_Sscl1980_lesion_Slys", "HannvsSlys",
+  "PRJNA341340_Sscl1980_lesion_Hann", "PRJNA341340_Sscl1980_lesion_Atha", "HannvsAtha",  
+  "PRJNA341340_Sscl1980_lesion_Atha", "PRJNA341340_Sscl1980_lesion_Slys", "AthavsSlys",
+  "PRJNA341340_Sscl1980_lesion_Atha", "PRJNA341340_Sscl1980_lesion_Hann", "AthavsHann",  
+  "PRJNA341340_Sscl1980_sclerotia_IV", "PRJNA341340_Sscl1980_ball_IVPDB", "Sclerotial"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA418121"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA418121_Sscl1980_periphery_AthaCol0_leaf_50hpi", "PRJNA418121_Sscl1980_periphery_SlysHeinz_leaf_50hpi", "AthavsSlys",
+  "PRJNA418121_Sscl1980_periphery_SlysHeinz_leaf_50hpi", "PRJNA418121_Sscl1980_periphery_AthaCol0_leaf_50hpi", "SlysvsAtha"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA471709"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_24hpi", "MvsERes",
+  "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_24hpi", "LvsERes",
+  "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_48hpi", "LvsMRes",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_24hpi", "MvsE",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_24hpi", "LvsE",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_48hpi", "LvsM",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_24hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_24hpi", "SuscvsResE",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_96hpi", "SuscvsRes",
+  "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_96hpi", "SuscvsRes"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA477716"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_ball_IVPDB_96hpi", "IPvsIV",
+  "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_ball_IVMM_96hpi", "IPvsIV",
+  "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_periphery_IVPDA_48hpi", "IPvsIV",
+  "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_center_IVPDA_48hpi", "IPvsIV"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA501892"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "IPvsIV",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "SuscvsResE",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "SuscvsRes",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "SuscvsRes",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "MvsE",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "LvsE",
+  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "LvsM",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "MvsERes",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "LvsERes",
+  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "LvsMRes"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA516496"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA516496_SsclCU824_lesion_LangTanjil_stem_72hpi", "PRJNA516496_SsclCU824_ball_IVPDB", "IPvsIV",
+  "PRJNA516496_SsclCU824_lesion_BnapCobbler_stem_72hpi", "PRJNA516496_SsclCU824_ball_IVPDB", "IPvsIV",
+  "PRJNA516496_SsclCU824_lesion_LangTanjil_stem_72hpi", "PRJNA516496_SsclCU824_lesion_BnapCobbler_stem_72hpi", "LangvsBnap",
+  "PRJNA516496_SsclCU824_lesion_BnapCobbler_stem_72hpi", "PRJNA516496_SsclCU824_lesion_LangTanjil_stem_72hpi", "BnapvsLang"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA574280"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "HannvsPvul",
+  "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "BvulvulvsPvul",
+  "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "RcomvsPvul",
+  "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "PvulvsHann",
+  "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "BvulvulvsHann",
+  "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "RcomvsHann",
+  "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "PvulvsBvulvul",
+  "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "HannvsBvulvul",
+  "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "RcomvsBvulvul",
+  "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "PvulvsRcom",
+  "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "HannvsRcom",
+  "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "BvulvulvsRcom"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA577619"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA577619_SsclDT8SsHADV_surface_hyphae_Bnap_12hpi", "PRJNA577619_SsclDT8_surface_hyphae_Bnap_12hpi", "SsHADVvsVF",
+  "PRJNA577619_SsclDT8SsHADV_surface_hyphae_Bnap_24hpi", "PRJNA577619_SsclDT8_surface_hyphae_Bnap_24hpi", "SsHADVvsVF",
+  "PRJNA577619_SsclDT8SsHADV_surface_hyphae_Bnap_18hpi", "PRJNA577619_SsclDT8_surface_hyphae_Bnap_18hpi", "SsHADVvsVF"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA593737"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA593737_SsclZ113OXSsNSRV1_colony_IVPDA", "PRJNA593737_Sscl1980_colony_IVPDA", "SsNRSVvsVF",
+  "PRJNA593737_SsclZ11OXSsNSRV1_colony_IVPDA", "PRJNA593737_Sscl1980_colony_IVPDA", "SsNRSVvsVF",
+  "PRJNA593737_SsclAH98_colony_IVPDA", "PRJNA593737_Sscl1980_colony_IVPDA", "SsNRSVSsHVvsVF"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA601001"
+this_meta <- meta %>% filter(bioproject == bpr)
+# Just the counts please, no replicates
+
+results <- run_count_norm(lcounts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+```
+
+
+```{r}
+bpr <- "PRJNA603456"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA603456_SsclMBGSs2_colony_IVPDAindol3carbinol", "PRJNA603456_SsclMBGSs2_colony_IVPDA", "none",
+  "PRJNA603456_SsclMBGSs2_colony_IVPDAallylisothiocyanate", "PRJNA603456_SsclMBGSs2_colony_IVPDA", "none"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA607858"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA607858_Sscl_lesion_AthaCol0Ago21_leaf_8hpi", "PRJNA607858_Sscl_lesion_AthaCol0_leaf_8hpi", "none"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA641217"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA641217_SsclDT8_lesion_Bnap_hypocotyl", "PRJNA641217_SsclDT8_colony_IVPDA", "IPvsIV",
+  "PRJNA641217_SsclDT8SsHADV_lesion_Bnap_hypocotyl", "PRJNA641217_SsclDT8SsHADV_colony_IVPDA", "none",
+  "PRJNA641217_SsclDT8SsHADV_colony_IVPDA", "PRJNA641217_SsclDT8_colony_IVPDA", "SsHADVvsVF",
+  "PRJNA641217_SsclDT8SsHADV_lesion_Bnap_hypocotyl", "PRJNA641217_SsclDT8_lesion_Bnap_hypocotyl", "SsHADVvsVF"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA641462"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA641462_SsclDT8SsHADV_lesion_BnapHuashaung4_hypocotyl", "PRJNA641462_SsclDT8_lesion_BnapHuashaung4_hypocotyl", "SsHADVvsVF"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA643804"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  "PRJNA643804_SsclDK3SlaGemV1_cellophane_colony_IVPDACellophane", "PRJNA643804_SsclDK3_cellophane_colony_IVPDACellophane", "SlaGemV1vsVF"
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA647983"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+# Network only
+
+results <- run_count_norm(lcounts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+```
+
+
+```{r}
+bpr <- "PRJNA670487"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_colony_IVPDA_DMSO', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_IVPDA', 'IPvsIV',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'SlysvsAtha',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'HannvsAtha',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'BvulvulvsAtha',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'RcomvsAtha',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PvulvsAtha',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'AthavsSlys',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'HannvsSlys',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'BvulvulvsSlys',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'RcomvsSlys',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PvulvsSlys',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'AthavsHann',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'SlysvsHann',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'BvulvulvsHann',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'RcomvsHann',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PvulvsHann',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'AthavsBvulvul',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'SlysvsBvulvul',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'HannvsBvulvul',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'RcomvsBvulvul',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PvulvsBvulvul',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'AthavsRcom',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'SlysvsRcom',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'HannvsRcom',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'BvulvulvsRcom',
+  'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PvulvsRcom',
+  'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'AthavsPvul',
+  'PRJNA670487_Sscl1980_periphery_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'SlysvsPvul',
+  'PRJNA670487_Sscl1980_periphery_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'HannvsPvul',
+  'PRJNA670487_Sscl1980_periphery_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'BvulvulvsPvul',
+  'PRJNA670487_Sscl1980_periphery_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_periphery_Pvul_leaf_50hpi', 'RcomvsPvul',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'SlysvsAtha',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'HannvsAtha',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'BvulvulvsAtha',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'RcomvsAtha',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PvulvsAtha',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'AthavsSlys',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'HannvsSlys',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'BvulvulvsSlys',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'RcomvsSlys',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PvulvsSlys',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'AthavsHann',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'SlysvsHann',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'BvulvulvsHann',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'RcomvsHann',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PvulvsHann',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'AthavsBvulvul',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'SlysvsBvulvul',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'HannvsBvulvul',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'RcomvsBvulvul',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PvulvsBvulvul',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'AthavsRcom',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'SlysvsRcom',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'HannvsRcom',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'BvulvulvsRcom',
+  'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PvulvsRcom',
+  'PRJNA670487_Sscl1980_center_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'AthavsPvul',
+  'PRJNA670487_Sscl1980_center_Slys_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'SlysvsPvul',
+  'PRJNA670487_Sscl1980_center_Hann_leaf_24hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'HannvsPvul',
+  'PRJNA670487_Sscl1980_center_Bvulvul_leaf_72hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'BvulvulvsPvul',
+  'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'RcomvsPvul'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA687280"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_12hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_24hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_48hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_72hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_24hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_12hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_6hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_6hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'SuscvsResE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_12hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_12hpi', 'SuscvsResE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_24hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_24hpi', 'SuscvsRes',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_48hpi', 'SuscvsRes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_24hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'MvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_48hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'MvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'LvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_24hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_12hpi', 'MvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_48hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_12hpi', 'MvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_12hpi', 'LvsERes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_24hpi', 'LvsMRes',
+  'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_48hpi', 'LvsMRes',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_24hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_6hpi', 'MvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_6hpi', 'MvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_6hpi', 'LvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_24hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_12hpi', 'MvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_12hpi', 'MvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_12hpi', 'LvsE',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_24hpi', 'LvsM',
+  'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'LvsM'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA695466"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA695466_SsclDT8SsHADV_colony_IVPDA', 'PRJNA695466_SsclDT8_colony_IVPDA', 'SsHADVvsVF'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA706136"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA706136_Sscl_lesion_Bole_petiole_8hpi', 'PRJNA706136_Sscl_lesion_Bvil_petiole_8hpi', 'BolevsBvil',
+  'PRJNA706136_Sscl_lesion_Bvil_petiole_8hpi', 'PRJNA706136_Sscl_lesion_Bole_petiole_8hpi', 'BvilvsBole'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA735329"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_24hpi', 'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_6hpi', 'MvsERes',
+  'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_48hpi', 'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_6hpi', 'LvsERes',
+  'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_48hpi', 'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_24hpi', 'LvsMRes'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA744751"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+# Just the counts please
+results <- run_count_norm(lcounts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+```
+
+```{r}
+bpr <- "PRJNA766564"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+exclude <- c("SRR16082437")
+
+contrasts <- matrix(c(
+   'PRJNA766564_Sscl_lesion_BnapWestar_stem_168hpi', 'PRJNA766564_Sscl_lesion_BnapWestar_stem_24hpi', 'LvsE',
+   'PRJNA766564_Sscl_lesion_BnapWestar_stem_168hpi', 'PRJNA766564_Sscl_lesion_Bnap1703_stem_168hpi', 'SuscvsRes'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta)
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr, exclude=exclude)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA777355"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_2hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_6hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_12hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_24hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_36hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_12hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_2hpi', 'MvsE',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_24hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_2hpi', 'MvsE',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_36hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_2hpi', 'MvsE',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_12hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_6hpi', 'MvsE',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_24hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_6hpi', 'MvsE',
+  'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_36hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_6hpi', 'MvsE'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA789389"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA789389_SsclNB5_lesion_GmaxACColibriOA_leaf_4hpi', 'PRJNA789389_SsclNB5_ball_IVCYM', 'IPvsIV',
+  'PRJNA789389_SsclNB5_lesion_GmaxACColibriOA_leaf_8hpi', 'PRJNA789389_SsclNB5_ball_IVCYM', 'IPvsIV',
+  'PRJNA789389_SsclNB5_lesion_GmaxACColibri_leaf_8hpi', 'PRJNA789389_SsclNB5_ball_IVCYM', 'IPvsIV',
+  'PRJNA789389_SsclNB5_lesion_GmaxACColibri_leaf_8hpi', 'PRJNA789389_SsclNB5_lesion_GmaxACColibriOA_leaf_8hpi', 'SuscvsResE'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr, exclude = "SRR17267260")
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r, fig.height=10, fig.width=10}
+bpr <- "PRJNA804213"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+# These don't have phenotypes that I can find, so no contrasts
+# PRJNA804213_SsclP7_lesion_LsatPI251246_leaf_42hpi
+# PRJNA804213_SsclP7_lesion_LsatArmenianLser_leaf_42hpi
+# PRJNA804213_SsclP7_lesion_Lsat43_leaf_42hpi
+
+contrasts <- matrix(c(
+  'PRJNA804213_SsclP7_lesion_LsatRedGranoble_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat58_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatPallone_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatOakLeaf_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKaiserSelbstschluss_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKahu_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatCobhamGreen_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatBloodyWarrior_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAmbassador_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAdriatica2_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat68_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSimpson_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSaladin_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRomainDeBenicardo_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatPrazan_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRedGranoble_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat58_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatPallone_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatOakLeaf_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKaiserSelbstschluss_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKahu_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatCobhamGreen_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatBloodyWarrior_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAmbassador_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAdriatica2_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat68_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSimpson_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSaladin_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRomainDeBenicardo_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatIceberg_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRedGranoble_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat58_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatPallone_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatOakLeaf_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKaiserSelbstschluss_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKahu_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatCobhamGreen_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatBloodyWarrior_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAmbassador_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAdriatica2_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat68_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSimpson_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSaladin_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRomainDeBenicardo_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatBataviaTezier_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRedGranoble_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat58_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatPallone_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatOakLeaf_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKaiserSelbstschluss_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatKahu_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatCobhamGreen_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatBloodyWarrior_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAmbassador_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatAdriatica2_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_Lsat68_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSimpson_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatSaladin_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes',
+  'PRJNA804213_SsclP7_lesion_LsatRomainDeBenicardo_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+```{r}
+bpr <- "PRJNA830457"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+# I decided to exclude the resynthesized sample in case it isn't a good representative of Bnapus
+# PRJNA830457_Sscl_periphery_BnapResynthesized_leaf_24hpi
+
+contrasts <- matrix(c(
+  'PRJNA830457_Sscl_periphery_BrapIMB218_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BoleTO1000_leaf_24hpi', 'BrapvsBole',
+  'PRJNA830457_Sscl_periphery_BnapSentry_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BoleTO1000_leaf_24hpi', 'BnapvsBole',
+  'PRJNA830457_Sscl_periphery_BrapIMB218_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BnapSentry_leaf_24hpi', 'BrapvsBnap',
+  'PRJNA830457_Sscl_periphery_BoleTO1000_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BnapSentry_leaf_24hpi', 'BolevsBnap',
+  'PRJNA830457_Sscl_periphery_BnapSentry_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BrapIMB218_leaf_24hpi', 'BnapvsBrap',
+  'PRJNA830457_Sscl_periphery_BoleTO1000_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BrapIMB218_leaf_24hpi', 'BolevsBrap'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+
+```{r}
+bpr <- "PRJNA874732"
+this_meta <- meta %>% filter(bioproject == bpr)
+#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+
+contrasts <- matrix(c(
+  'PRJNA874732_Sscl1980dSsAOX_colony_IVMMGluSSE', 'PRJNA874732_Sscl1980_colony_IVMMGluSSE', 'none'
+), ncol=3, byrow = TRUE)
+
+contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
+all_contrasts[[bpr]] <- contrasts
+results <- run_deg_tests(lcounts, contrasts, bpr)
+norm_counts[[bpr]] <- results[["norm_counts"]]
+deg_results <- c(deg_results, results[["tests"]])
+```
+
+Yay!
+They're all done.
+Now I need to combine the results and turn it into something we can use for the next steps.
+
+
+```{r}
+contrasts <- do.call(rbind, all_contrasts)
+row.names(contrasts) <- NULL
+
+deg_results_ <- do.call(rbind, lapply(
+  names(deg_results),
+  FUN = function(n) {
+    as.data.frame(deg_results[[n]]) %>% rownames_to_column("geneid") %>% mutate(contrast = n)    
+  }
+))
+row.names(deg_results_) <- NULL
+
+deg_results_ <- left_join(
+  deg_results_ %>% unique(),
+  contrasts %>% unique(),
+  by = "contrast"
+) %>% unique()
+
+deg_results_ <- deg_results_[
+  order(deg_results_$contrast_group, deg_results_$bioproject, deg_results_$contrast, deg_results_$geneid),
+  c('contrast', 'contrast_group', 'bioproject', 'sample1', 'sample2', 'host1', 'hpi1', 'host2', 'hpi2', 'geneid', 'baseMean', 'log2FoldChange', 'lfcSE', 'stat', 'pvalue', 'padj')
+]
+
+readr::write_tsv(deg_results_, "output/dge_tests.tsv", na = "-")
+head(deg_results_)
+```
+
+Ok. thats the DGE tests done.
+Now the counts.
+
+```{r}
+norm_counts_ <- do.call(cbind, norm_counts)
+
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(norm_counts_) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "disp_norm_count"),
+  by = c("sra", "id")
+)
+
+norm_counts_[1:5, 1:5]
+dim(norm_counts_)
+```
+
+That was easy.
+Let's look again at the PCA plots.
+
+```{r}
+pca_raw <- princomp(norm_counts_, fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+```{r}
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+head(pca)
+```
+
+
+```{r, fig.width = 10, fig.height = 10}
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+It's a bit less crazy, which I like.
+I think there's some nice clustering of hosts in there, so it seems like it should be possible to pull interesting things from this.
+
+So in an ideal world, you'd have most of the variation explained by factors of interest.
+I do see a general clustering of samples from the same bioprojects.
+But there also tend to be similar treatments within each bioproject, so it's difficult to tell.
+
+We'll have to see.
+Maybe I can remove some of these effects.
+I was planning to [SVA](https://academic.oup.com/nargab/article/2/3/lqaa078/5909519) to do this, but it seems like it can't handle the DESeq2 counts shrunk counts.
+So i'll run ComBat_seq on the raw data and redo the rlog shrinkage.
+Unfortunately, i can't seem to include any of the covariates of interest in the ComBat model as they're all confounded with the BioProject.
+So we'll have to see if it removes any factors of interest.
+
+
+```{r}
+batch <- setNames(meta[["bioproject"]], meta[["sra"]])[colnames(norm_counts_)]
+tmp <- as.data.frame(column_to_rownames(meta, "sra")[colnames(norm_counts_), ])
+tmp[is.na(tmp)] <- "NA"
+
+tmp_counts <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+mm <- model.matrix(~as.factor(sample), data=tmp)
+
+# Paper says that applying shrinkage at this point is unnecessary.
+combat_edata <- ComBat_seq(
+  tmp_counts,
+  batch=batch,
+  group=NULL,
+  shrink.disp = FALSE,
+  shrink = FALSE
+)
+combat_edata[1:5, 1:5]
+```
+
+```{r}
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(combat_edata) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "batch_norm_count"),
+  by = c("sra", "id")
+)
+head(lcounts)
+```
+
+Ok. So we've done the batch correction, now we do the DESeq correction again.
+
+
+```{r, fig.height = 10, fig.width = 10}
+run_count_norms2 <- function(lcounts, bpr) {
+  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = batch_norm_count) %>%
+    column_to_rownames("id") %>%
+    as.matrix()
+  
+  all(rownames(this_meta) == colnames(this_counts))
+  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
+  
+  dds <- DESeqDataSetFromMatrix(
+    countData = this_counts,
+    colData = this_meta_,
+    design = ~ 1
+  )
+  
+  ncounts <- assay(rlog(dds, blind = TRUE))
+  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
+  
+  return(ncounts)
+}
+
+norm_counts <- list()
+
+for (bpr in unique(meta$bioproject)) {
+  this_meta <- meta %>% filter(bioproject == bpr)
+  norm_counts[[bpr]] <- run_count_norms2(lcounts, bpr)
+}
+
+norm_counts_ <- do.call(cbind, norm_counts)
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(norm_counts_) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "norm_count"),
+  by = c("sra", "id")
+)
+
+norm_counts_[1:5, 1:5]
+dim(norm_counts_)
+```
+
+The per bioproject PCA plots look very similar to the others, though it's difficult to compare them scrolling up and down.
+Now let's look at the whole PCA.
+
+```{r}
+tmp_counts <- apply(norm_counts_, MARGIN = 2, FUN = scale)
+rownames(tmp_counts) <- rownames(norm_counts_)
+colnames(tmp_counts) <- colnames(norm_counts_)
+
+tmp_counts[is.na(tmp_counts)] <- 0
+pca_raw <- princomp(tmp_counts, fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+We've jumped from the first PC explaining ~23% of the variance to ~27%.
+It's not much of a difference.
+
+
+```{r}
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta %>% select(sra, host_tidyname, bioproject), pca, by = "sra")
+```
+
+```{r, fig.width = 10, fig.height = 10}
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+ggsave("output/combat_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+```{r, fig.width = 5, fig.height = 3.5}
+gg3 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  unique() %>%
+  ggplot(aes(x=value)) +
+  geom_histogram(fill = "black") +
+  facet_grid(cols = vars(name), scales = "free")
+
+print(gg3)
+```
+
+
+Yeah i do think that the PCs are maybe a bit tidier.
+I definitely still see groupings of samples from the same bioproject, but probably it's unavoidable.
+Maybe i'll look at correlation matrices.
+
+Here's the one from the ComBat normalised counts.
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = norm_count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+Well the clusters in here certainly make more sense than from the raw data.
+I've looked at the data, and i don't think a log transformation is necessary.
+
+And here's the one from the dispersion normalised counts (i.e. DESeq but no ComBat).
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+These look almost identical.
+I think that because the extra amount of variance explained is relatively low, and the results look fairly similar, i won't continue with the ComBat normalised counts.
+There's a risk that removing the bioproject effect might remove some information about treatments (esp because I wasn't able to provide info about treatments).
+The benefits don't seem to outweigh the risks.
+
+I'd like to see what we can do with gene level correlation.
+Do the gene expression values look ok?
+
+```{r}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+# There are two genes with no counts in any samples.
+# We need to exclude them for the correlation to work.
+# Causes error about stddev == 0.
+tmp_cor_disp <- cor(t(tmp[(rowSums(tmp) > 0), ]))
+
+quantile(tmp_cor_disp)
+```
+
+Yeah that seems like a reasonable range of values.
+I think probably the number of genes with mid correlation (~0.5-0.8) is caused by genes with relatively low variation across treatments.
+I suspect that once we remove those genes we'll see cleaner differences.
+
+```{r}
+pca_raw <- prcomp(t(tmp), retx = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+```{r, fig.width = 4.75, fig.height = 3.5}
+pca <- as.data.frame(pca_raw$rotation[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("id")
+
+gg <- ggplot(pca, aes(x=PC01, y=PC02)) +
+  geom_point(alpha = 0.7, size = 3)
+
+print(gg)
+
+gg <- ggplot(pca, aes(x=PC03, y=PC04)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg
+```
+
+I guess the values look fine.
+It's a bit hard to say but there aren't like crazy clusters or massive outliers.
+
+We'll continue with the dispersion corrected counts.
+I just want to check though whether there are mean differences left in the data.
+
+```{r, fig.height=20, fig.width = 20}
+ggplot(lcounts, aes(x = sra, y = disp_norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
+```
+
+I do see differences in mean and scale between bioprojects.
+They're pretty similar in terms of the range, but it might be a problem later if we do anything other than correlation clustering.
+How are the ComBat counts?
+
+```{r, fig.height=20, fig.width = 20}
+ggplot(lcounts, aes(x = sra, y = norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
+```
+
+I seems like the main contribution here is that some of the crazy outliers in PRJNA670487 are squished.
+Otherwise the counts have pretty similar ranges.
+
+I think _maybe_ i'm coming back around to ComBat just for the sake of shrinking the outliers?
+
+I'm just going to save them both and we can decide later :)
+
+
+```{r}
+lcounts %>%
+  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = disp_norm_count) %>%
+  readr::write_tsv("output/feature_counts_deseq2_normed.tsv", na = "-")
+```
+
+```{r}
+lcounts %>%
+  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = norm_count) %>%
+  readr::write_tsv("output/feature_counts_combat_normed.tsv", na = "-")
+```
+
+BYEEE!

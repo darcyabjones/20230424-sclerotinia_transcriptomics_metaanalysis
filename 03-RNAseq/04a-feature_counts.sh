@@ -10,7 +10,7 @@ else
 fi
 
 tail -n+2 input/sra_rnaseq.tsv \
-| awk '$14 == "TRUE" || $14 == "NETWORK_ONLY"' \
+| awk -F '\t' '$14 == "TRUE" || $14 == "NETWORK_ONLY"' \
 | ../code/slurm_scripts/bin/pt --file - "code/feature_count.sh {0} {6} {7} input/Sscl1980-nuclear.fasta work/genes.gtf"  \
 | ../code/slurm_scripts/bin/sbatch_jobarray.sh \
   --cpus-per-task 4 \
