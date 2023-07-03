@@ -55,3 +55,4 @@ slurm*.out
 !jbrowse2/config.json
 !input/reference_genome/*
 !input/*.tsv
+.Rproj.user
