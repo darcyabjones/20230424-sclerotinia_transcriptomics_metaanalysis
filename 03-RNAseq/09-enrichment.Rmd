@@ -1,0 +1,93 @@
+---
+title: "09-enrichment.Rmd"
+output: html_document
+date: "2023-07-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(tidyverse)
+```
+
+```{r}
+func <- readr::read_tsv("input/protein_functions_long.tsv", na = ".")
+head(func)
+```
+
+```{r}
+eff <- readr::read_tsv("input/predicted_protein_functions.tsv", na = ".")
+head(eff)
+```
+
+```{r}
+published <- readr::read_tsv("input/published_sclero_genes.tsv")
+head(published)
+```
+
+
+
+```{r}
+ipvsiv <- list()
+for (sheetname in readxl::excel_sheets("output/ipvsiv_meta.xlsx")) {
+  ipvsiv[[sheetname]] <- readxl::read_xlsx("output/ipvsiv_meta.xlsx", sheet = sheetname)  
+}
+
+ipvsiv[["IPvsIV_Bnap_PRJNA327437"]] <- NULL
+```
+
+```{r}
+mapper <- function(df) {
+  return(df %>% dplyr::select(geneid, host1, meta))
+}
+
+ipvsiv_dge <- do.call(rbind, lapply(ipvsiv, mapper)) %>%
+  pivot_wider(id_cols = "geneid", names_from = "host1", values_from = "meta") %>%
+  column_to_rownames("geneid")
+
+#ipvsiv_dge <- ipvsiv_dge[apply(ipvsiv_dge, MARGIN = 1, any), ]
+ipvsiv_dge <- ipvsiv_dge[rowSums(ipvsiv_dge) > 1, ]
+
+ipvsiv_dge <- as.matrix(ipvsiv_dge)
+heatmap(1 * ipvsiv_dge)
+```
+
+How many genes are DGE in all hosts.
+
+```{r}
+sum(apply(ipvsiv_dge, MARGIN = 1, FUN = all))
+```
+
+So what's common to most of the DGE sets?
+Here we're looking at genes DGE in at least 9 of 11 hosts.
+
+```{r}
+common_cands <- left_join(
+  as.data.frame(ipvsiv_dge) %>% rownames_to_column("name") %>% mutate(n = rowSums(across(where(is.logical)))) %>% select(name, n) %>% filter(n > 9),
+  eff %>% dplyr::select(name, effector_score, deeploc2_preds, effectordb_name, swissprot_protein_name, go_name, ipr_name),
+  by = "name"
+)
+
+common_cands[order(common_cands$effector_score, decreasing = TRUE), ]
+```
+
+Ok. So as i expected the top candidates 
+
+
+```{r}
+mapper <- function(df) {
+  return(df %>% mutate(dge = ifelse(meta, lfc_median, NA)) %>% dplyr::select(geneid, host1, dge))
+}
+
+ipvsiv_lfc <- do.call(rbind, lapply(ipvsiv, mapper)) %>%
+  pivot_wider(id_cols = "geneid", names_from = "host1", values_from = "dge") %>%
+  column_to_rownames("geneid")
+
+ipvsiv_lfc <- ipvsiv_lfc[!apply(is.na(ipvsiv_lfc), MARGIN = 1, all), ]
+ipvsiv_lfc[is.na(ipvsiv_lfc)] <- 0
+ipvsiv_lfc <- as.matrix(ipvsiv_lfc)
+heatmap(ipvsiv_lfc)
+```

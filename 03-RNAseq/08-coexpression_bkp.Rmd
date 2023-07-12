@@ -1,0 +1,342 @@
+---
+title: "08-coexpression.Rmd"
+output: html_document
+date: "2023-07-04"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library("tidyverse")
+library("UpSetR")
+library("igraph")
+library("ppcor")
+```
+
+```{r}
+ggplot2::theme_set(ggplot2::theme_bw() +
+  ggplot2::theme(
+    strip.background = element_rect(
+     color="black", fill="white", linewidth=0, linetype="solid"
+    ),
+    rect = element_rect(
+      colour = "black",
+      linewidth = 1,
+      linetype = "solid"
+    )
+  )
+)
+
+okabe <- c('#000000', '#E69F00', '#56B4E9', '#009E73', '#F0E042', '#0072B2', '#D55E00', '#CC79A7', '#999999')
+options(ggplot2.discrete.fill = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+options(ggplot2.discrete.colour = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+
+gg_shape <- function(gg, vals) {gg + scale_shape_manual(values = rep(c(15, 17:20), 100))}
+```
+
+```{r, message=FALSE}
+meta <- readr::read_tsv("input/sra_rnaseq2.tsv", na = "-")
+orig_counts <- readr::read_tsv("output/feature_counts.tsv")
+counts <- readr::read_tsv("output/feature_counts_deseq2_normed.tsv", na = "-")
+
+counts <- dplyr::inner_join(
+  meta,
+  counts %>% pivot_longer(-id, names_to = "sra", values_to = "count"),
+  by = "sra"
+) %>%
+dplyr::left_join(
+  .,
+  orig_counts %>% mutate(id = sub("gene-", "", Geneid)) %>% dplyr::select(id, gene_length = Length),
+  by = "id"
+) %>%
+  dplyr::select(
+    sra, bioproject,included,sample,
+    organism,organism_tidyname,
+    accession,accession_tidyname,
+    host,host_tidyname,
+    host_accession,host_accession_tidyname,
+    tissue,hpi,plant_tissue,treatment,treatment_tidy,
+    id,count,gene_length
+  )
+
+zero_counts <- counts %>% group_by(id) %>% summarise(count = sum(count)) %>% filter(count == 0.) %>% .[, "id"] %>% .[[1]]
+counts <- counts %>% filter(!id %in% zero_counts)
+
+rm(meta)
+rm(orig_counts)
+
+print(dim(counts))
+head(counts)
+```
+
+
+There's a well known tendency for longer reads to have higher counts.
+Normally this isn't a problem for DGE testing, because we're only comparing a gene with itself, so the length is constant.
+However if we're looking for coexpression, we'll also be comparing the different gene lengths.
+It may be fine if we use a metric that is unaffected by size (only correlation), like some of the rank methods.
+
+So i'll have a look at out data to see if we need to normalise.
+
+```{r, fig.height=10, fig.width=10}
+ggplot(counts, aes(x = gene_length, y = count)) +
+  geom_point(size = 1, alpha = 0.6) +
+  facet_wrap(vars(bioproject))
+```
+
+There's a slight tendency for longer genes to have higher values.
+The smaller genes make up the majority of genes with high expression, but this is really just because large genes are very rare.
+
+```{r, fig.height=10, fig.width=10}
+ggplot(counts, aes(x = gene_length, y = count)) +
+  geom_point(size = 1, alpha = 0.6) +
+  xlim(0, 2000) +
+  facet_wrap(vars(bioproject))
+```
+
+
+So i'll divide the count by the gene length in kilobases.
+This is roughly analogous to the common FPKM metric.
+
+```{r, fig.height=10, fig.width=10}
+ggplot(counts, aes(x = gene_length, y = count / (gene_length / 1000))) +
+  geom_point(size = 1, alpha = 0.6) +
+  facet_wrap(vars(bioproject))
+```
+
+
+```{r, fig.height=10, fig.width=10}
+ggplot(counts, aes(x = gene_length, y = count / (gene_length / 1000))) +
+  geom_point(size = 1, alpha = 0.6) +
+  xlim(0, 2000) +
+  facet_wrap(vars(bioproject))
+```
+
+
+I think actually that the unnormalised data looks ok.
+And peaks we get at the lower values in the "normalised" counts worries me a bit.
+It's probably fine either way, but I'll go with the unnormalised ones.
+
+
+```{r}
+gen_count_matrix <- function(df) {
+  #zero_counts <- df %>% group_by(id) %>% summarise(count = sum(count)) %>% filter(count == 0.) %>% .[, "id"] %>% .[[1]]
+  df <- df %>%
+    pivot_wider(id_cols = "id", names_from = "sra", values_from = "count") %>%
+    column_to_rownames("id") %>%
+    as.matrix()
+  
+  return(df)
+}
+
+cor.test.p <- function(x, method = "pearson") {
+  n <- (!is.na(x)) %*% t(!is.na(x))
+  r <- cor(t(x), method = method, use = "pairwise.complete.obs")
+  
+  if (method %in% c("pearson", "spearman")) {
+    t <- (r * sqrt(n - 2)) / sqrt(1 - r^2)
+    p <- 2 * (1 - pt(abs(t), (n - 2)))
+  } else if (method == "kendall") {
+    p <- NULL
+  } else {
+    stop("Don't be silly darcy")
+  }
+  return(p)
+}
+```
+
+```{r}
+collapse_duplicates <- function(mat, precision = 4) {
+  strings <- data.frame(
+    id = rownames(mat),
+    counts = do.call(paste, as.data.frame(round(mat, precision)))
+  )
+
+  strings <- strings %>%
+    group_by(counts) %>%
+    summarise(n = n_distinct(id), ids = paste0(unique(id), collapse = "__"), rep = first(id))
+
+  strings <- strings[order(strings$ids), ]
+
+  new_mat <- mat[strings[["rep"]], ]
+  rownames(new_mat) <- strings[["ids"]]
+  return(new_mat)
+}
+```
+
+```{r}
+collapse_approx_duplicates <- function(mat, method = "pearson", precision = (1 - 1e-5)) {
+  cor_mat <- cor(t(mat), method = method) >= precision
+  
+  adj <- graph_from_adjacency_matrix(cor_mat, mode = "undirected", diag = TRUE)
+  tmp <- components(adj)$membership
+
+  gvar <- apply(mat, MARGIN = 1, var, na.rm = TRUE)
+  gvar[is.na(gvar)] <- 0
+  
+  tmp <- data.frame(id = names(tmp), component = unname(tmp))
+  gvar <- data.frame(id = names(gvar), var = unname(gvar))
+  tmp <- left_join(
+    tmp,
+    gvar,
+    by = "id"
+  )
+
+  tmp <- tmp[order(tmp$var, decreasing = TRUE, na.last = TRUE), ] %>%
+    group_by(component) %>%
+    summarise(rep = first(id), id = paste(id, collapse = "__", sep = "__"))
+  
+  new_mat <- mat[tmp[["rep"]], ]
+  rownames(new_mat) <- tmp[["id"]]
+  return(new_mat)
+}
+```
+
+```{r, warning=FALSE}
+ctest <- gen_count_matrix(counts %>% filter(host_tidyname == "Psat"))
+
+ctest <- collapse_duplicates(ctest)
+ctest <- collapse_approx_duplicates(ctest)
+
+ctp1 <- cor.test.p(ctest)
+ctp1[1:5, 1:5]
+```
+
+```{r}
+unify <- function(m) {
+    m[lower.tri(m)] <- t(m)[lower.tri(m)]
+    m
+}
+
+p.adjust.square <- function(mat, method = "BH") {
+  # Uncertain whether NA will mutate outer matrix.
+  # So i make copy.
+  mat_ <- mat
+  mat_[lower.tri(mat, diag = TRUE)] <- NA
+
+  adj <- p.adjust(mat_, method = "BH")
+  adj <- matrix(adj, nrow = nrow(mat), ncol = ncol(mat))
+
+  adj <- unify(adj)
+  diag(adj) <- 0
+
+  colnames(adj) <- colnames(mat)
+  rownames(adj) <- rownames(mat)
+  return(adj)
+}
+
+ctp1_adj <- p.adjust.square(ctp1)
+ctp1_adj[1:5, 1:5]
+```
+
+
+
+
+
+```{r}
+ctpl <- ctp1_adj <= 1e-2
+ctpl[is.na(ctpl)] <- FALSE
+ctpl[1:5, 1:5]
+```
+
+
+```{r}
+adj <- graph_from_adjacency_matrix(ctpl, mode = "undirected", diag = FALSE)
+adj
+```
+
+```{r}
+tmp <- components(adj)$membership
+tmp2 <- data.frame(id = names(tmp), component = unname(tmp))
+tmp3 <- tmp2 %>% group_by(component) %>% summarise(n_distinct(id))
+tmp3[order(tmp3$`n_distinct(id)`, decreasing = TRUE), ]
+```
+
+
+```{r}
+cluster <- tmp2 %>% filter(component == 35) %>% dplyr::select(id) %>% .[[1]]
+ctest2 <- ctest[rownames(ctest) %in% cluster, ]
+heatmap(ctest2, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest2), mean(ctest2), max(ctest2)), fill=heat.colors(3))
+```
+
+
+```{r}
+tmp <- cor(t(ctest2))
+heatmap(tmp, symm = TRUE, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(tmp), mean(tmp), max(tmp)), fill=heat.colors(3))
+```
+
+
+```{r}
+p <- pcor(t(ctest2), method = "spearman")
+pestimate <- p$estimate
+colnames(pestimate) <- rownames(pestimate) <- rownames(ctest2)
+heatmap(pestimate, symm = TRUE, col = heat.colors(50))
+legend(x="bottomright", legend = c(min(p$estimate), mean(p$estimate), max(p$estimate)), fill=heat.colors(3))
+```
+
+```{r}
+pstat <- replace(p$statistic, is.na(p$statistic), min(p$statistic, na.rm = TRUE))
+#pstat <- 2 * pt(pstat, p$n - 2)
+colnames(pstat) <- rownames(pstat) <- rownames(ctest2)
+
+heatmap(pstat, symm = TRUE, na.rm = TRUE, col = heat.colors(50))
+legend(x="bottomright", legend = c(min(pstat, na.rm = TRUE), mean(pstat, na.rm = TRUE), max(pstat, na.rm = TRUE)), fill=heat.colors(3))
+```
+
+```{r}
+unify_pcor <- function(mat) {
+  out <- matrix(NA, ncol = ncol(mat), nrow = nrow(mat))
+  colnames(out) <- rownames(out) <- rownames(mat)
+  
+  lower <- as.vector(mat[lower.tri(mat)])
+  upper <- as.vector(t(mat)[lower.tri(mat)])
+
+  out[lower.tri(out)] <- ifelse(is.na(upper), lower, upper)
+  return(out)
+}
+
+pstat <- p$statistic 
+#pstat <- replace(pstat, is.na(pstat), min(pstat, na.rm = TRUE))
+#pstat <- 2 * pt(pstat, p$n - 2)
+colnames(pstat) <- rownames(pstat) <- rownames(ctest2)
+
+pstat2 <- unify_pcor(pstat)
+diag(pstat2) <- 0
+
+pstat2 <- replace(pstat2, is.na(pstat2), min(pstat2, na.rm = TRUE))
+
+heatmap(pstat2, symm = TRUE, na.rm = TRUE, col = heat.colors(50))
+legend(x="bottomright", legend = c(min(pstat2, na.rm = TRUE), mean(pstat2, na.rm = TRUE), max(pstat2, na.rm = TRUE)), fill=heat.colors(3))
+```
+
+
+
+```{r}
+library(ica)
+```
+
+```{r}
+m <- ica(t(ctest), 8, method = "jade")
+heatmap(m$S, scale = "none")
+```
+
+```{r}
+heatmap(m$M)
+```
+
+
+
+
+
+
+
+
+
+
+

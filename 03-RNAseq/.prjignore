@@ -11,3 +11,4 @@ input/sra_rnaseq\.tsv
 input/Sscl1980-nuclear\.fasta
 input/Sscl1980-mRNA\.gtf
 input/Sscl1980-cds\.fna
+input/protein_functions_long\.tsv

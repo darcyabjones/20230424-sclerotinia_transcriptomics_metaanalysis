@@ -46,3 +46,14 @@ mv sra_rnaseq2.tsv input
 
 Code has touched these files:
 - NEW: input/sra_rnaseq2.tsv (sha256:2aebadb931b8b8e66d31d7ad1d4ef225ac08d8810dbd26dfca022d79a16a2e56)
+
+## Added input at 20230711-131907
+
+Adding functions
+
+```
+cp ../01-genome_functional_annotation/output/protein_functions_long.tsv ./input
+```
+
+Code has touched these files:
+- NEW: input/protein_functions_long.tsv (sha256:19564225cae5ab3f043c915df9d43bb545849c357cb5977327600a6db2e18955)
