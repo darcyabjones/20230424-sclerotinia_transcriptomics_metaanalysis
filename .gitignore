@@ -21,6 +21,8 @@
 *.stdout
 *.nextflow.log*
 *.sif
+.RData
+.Rhistory
 slurm*.out
 
 **/multiqc_data
