@@ -12,3 +12,9 @@ input/Sscl1980-nuclear\.fasta
 input/Sscl1980-mRNA\.gtf
 input/Sscl1980-cds\.fna
 input/protein_functions_long\.tsv
+work/modulome/cluster_components\.py
+work/modulome/compute_distance\.py
+work/modulome/get_dimension\.py
+work/modulome/random_restart_ica\.py
+work/modulome/run_ica\.sh
+code/PCAtest\.R

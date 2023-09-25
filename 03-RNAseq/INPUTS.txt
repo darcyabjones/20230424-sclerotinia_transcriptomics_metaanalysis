@@ -57,3 +57,69 @@ cp ../01-genome_functional_annotation/output/protein_functions_long.tsv ./input
 
 Code has touched these files:
 - NEW: input/protein_functions_long.tsv (sha256:19564225cae5ab3f043c915df9d43bb545849c357cb5977327600a6db2e18955)
+
+## Added input at 20230719-163758
+
+modulome scripts
+
+```
+wget -O work/modulome/cluster_components.py https://raw.githubusercontent.com/avsastry/modulome-workflow/f15878d5ffeae3f8d28a048dffe676f3703eeed0/4_optICA/cluster_components.py
+```
+
+Code has touched these files:
+- NEW: work/modulome/cluster_components.py (sha256:474bdb870d7f416d4927bc8a43e4e17c973801db4e619e941098f84d883f92bf)
+
+## Added input at 20230719-163849
+
+modulome scripts
+
+```
+wget -O work/modulome/compute_distance.py https://raw.githubusercontent.com/avsastry/modulome-workflow/f15878d5ffeae3f8d28a048dffe676f3703eeed0/4_optICA/compute_distance.py
+```
+
+Code has touched these files:
+- NEW: work/modulome/compute_distance.py (sha256:7a7dd6aaf62b9602f27b0409c3453be07ab117ca2d414de2048da55fffef3589)
+
+## Added input at 20230719-163929
+
+modulome scripts
+
+```
+wget -O work/modulome/get_dimension.py https://raw.githubusercontent.com/avsastry/modulome-workflow/f15878d5ffeae3f8d28a048dffe676f3703eeed0/4_optICA/get_dimension.py
+```
+
+Code has touched these files:
+- NEW: work/modulome/get_dimension.py (sha256:0f2b80306e5e1495744e735ffea16b323fae063e1e2eeec59c1cac83dda66806)
+
+## Added input at 20230719-163959
+
+modulome scripts
+
+```
+wget -O work/modulome/random_restart_ica.py https://github.com/avsastry/modulome-workflow/blob/f15878d5ffeae3f8d28a048dffe676f3703eeed0/4_optICA/random_restart_ica.py
+```
+
+Code has touched these files:
+- NEW: work/modulome/random_restart_ica.py (sha256:46a70ba518025eeb173fb116e69510884af59b32ab8ef9ed2a6c47a6f7f850cd)
+
+## Added input at 20230719-164029
+
+modulome scripts
+
+```
+wget -O work/modulome/run_ica.sh https://raw.githubusercontent.com/avsastry/modulome-workflow/f15878d5ffeae3f8d28a048dffe676f3703eeed0/4_optICA/run_ica.sh
+```
+
+Code has touched these files:
+- NEW: work/modulome/run_ica.sh (sha256:ce8728a75db13ebd96e80e6f9dd5d1f039a04dd3f2eef06c2999288f57bcf4a5)
+
+## Added input at 20230720-095805
+
+R function that i couldnt seem to install
+
+```
+wget -O code/PCAtest.R https://raw.githubusercontent.com/arleyc/PCAtest/master/R/PCAtest.R
+```
+
+Code has touched these files:
+- NEW: code/PCAtest.R (sha256:0777d4602b43d8c7bafffedc376d739edc7fb27d22a27a54268ce5e866d1a16b)

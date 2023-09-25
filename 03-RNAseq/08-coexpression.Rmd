@@ -202,6 +202,11 @@ wcounts <- collapse_duplicates(wcounts)
 print(sprintf("nrow before %d", nrow(wcounts)))
 wcounts <- wcounts[rowSums(wcounts, na.rm = TRUE) > 0, ]
 print(sprintf("nrow after %d", nrow(wcounts)))
+
+wcounts <- wcounts[(!is.na(gene_sds)) & (gene_sds > 0) & (rowSums(wcounts, na.rm = TRUE) > 0), ]
+norm_factors <- calcNormFactors(wcounts)
+wcounts <- (wcounts - colMeans(wcounts)) / norm_factors
+
 wcounts[1:5, 1:5]
 ```
 

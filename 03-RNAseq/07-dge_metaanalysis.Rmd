@@ -45,24 +45,12 @@ gg_shape <- function(gg, vals) {gg + scale_shape_manual(values = rep(c(15, 17:20
 First i need to load the data.
 
 ```{r}
-dge <- readr::read_tsv("output/dge_tests.tsv", na = "-")
-dge %>% head
-```
+dge <- list()
 
-And let's see what kinds of groups of DGE tests we have.
-
-```{r, fig.height=10, fig.width=14}
-lfc_counts <- dge %>% group_by(contrast_group, contrast, sample1, sample2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
-  pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
-  ggplot(aes(x = contrast, y = count, fill = direction)) +
-  geom_bar(stat="identity") +
-  facet_wrap(vars(contrast_group), drop = TRUE, scales = "free") +
-  theme(axis.title.x=element_blank(),
-        axis.text.x=element_blank(),
-        axis.ticks.x=element_blank())
-
-lfc_counts
+for (sheetname in readxl::excel_sheets("output/dge_tests.xlsx") ) {
+  dge[[sheetname]] <- readxl::read_xlsx("output/dge_tests.xlsx", sheet = sheetname)
+}
+head(dge[[1]])
 ```
 
 
@@ -73,9 +61,10 @@ We'll start with the most common kind of contrast, comparing infection vs media 
 I'll look at these for each host species individually, and we'll probably have split those further as well.
 So how many samples do we have for each species?
 
-```{r, fig.height=10, fig.width=14}
-dge %>% filter(contrast_group == "IPvsIV") %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+
+```{r}
+dge[["host"]] %>% filter(contrast_group == "IPvsIV")%>% group_by(contrast_group, contrast, host1, host2) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -84,6 +73,109 @@ dge %>% filter(contrast_group == "IPvsIV") %>% group_by(contrast_group, contrast
         axis.text.x=element_blank(),
         axis.ticks.x=element_blank())
 ```
+
+
+```{r}
+dge[["ipvsiv"]] %>% group_by(contrast_group, contrast, host1, host2, infection_stage1) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
+  pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
+  ggplot(aes(x = contrast, y = count, fill = direction)) +
+  geom_bar(stat="identity") +
+  facet_wrap(vars(host1), drop = TRUE, scales = "free") +
+  theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+```
+
+Right, so with the IP vs IV samples we need to decide for each bioproject/host pair whether we need to use the group-wise option or a specific time-point.
+
+These are all of the hosts we need to look at.
+
+```{r}
+ipvsiv <- dge[["host"]] %>% filter(host2 == "IV")
+ipvsiv %>% .[["host1"]] %>% unique()
+```
+
+
+```{r}
+ipvsiv2 <- dge[["ipvsiv"]]
+ipvsiv2 %>% .[["host1"]] %>% unique()
+```
+
+```{r}
+ipvsiv_curated <- list()
+
+ipvsiv_curated[["rest"]] <- ipvsiv %>% filter(!host1 %in% c("Psat", "Bnap", "Gmax", "Cari"))
+```
+
+
+```{r}
+ipvsiv %>% filter(host1 == "Psat") %>% .[["bioproject"]] %>% unique()
+```
+
+```{r}
+ipvsiv2 %>% filter(host1 == "Psat") %>% select(bioproject, infection_stage1) %>% unique()
+```
+
+ok so for Pea we have only one bioproject with ip vs iv, and it had time-points of in vitro samples.
+We'll take the marginal.
+
+```{r}
+ipvsiv_curated[["Psat"]] <- ipvsiv %>% filter(host1 == "Psat")
+```
+
+
+
+```{r}
+ipvsiv %>% filter(host1 == "Bnap") %>% .[["bioproject"]] %>% unique()
+```
+
+
+```{r}
+ipvsiv2 %>% filter(host1 == "Bnap") %>% select(bioproject, infection_stage1) %>% unique()
+```
+
+For brassica napus we have two time courses and i couln't get proper marginal contrasts.
+We'll use the mid stage time points, 12H-24H
+
+```{r}
+ipvsiv_curated[["Bnap"]] <- ipvsiv2 %>% filter(host1 == "Bnap", infection_stage1 == "M")
+```
+
+
+```{r}
+ipvsiv %>% filter(host1 == "Gmax") %>% .[["bioproject"]] %>% unique()
+```
+
+```{r}
+ipvsiv2 %>% filter(host1 == "Gmax") %>% select(bioproject, infection_stage1) %>% unique()
+```
+For soybean because we only have the early time point in both sets we'll take that.
+
+```{r}
+ipvsiv_curated[["Gmax"]] <- ipvsiv2 %>% filter(host1 == "Gmax", infection_stage1 == "E")
+```
+
+```{r}
+ipvsiv %>% filter(host1 == "Cari") %>% .[["bioproject"]] %>% unique()
+```
+
+```{r}
+ipvsiv2 %>% filter(host1 == "Cari") %>% select(bioproject, infection_stage1) %>% unique()
+```
+
+```{r}
+ipvsiv_curated[["Cari"]] <- ipvsiv2 %>% filter(host1 == "Cari", infection_stage1 == "L")
+```
+
+
+```{r}
+ipvsiv <- do.call(rbind, ipvsiv_curated)
+ipvsiv["contrast_group"] <- "IPvsIV"
+ipvsiv
+```
+
+
 
 
 ```{r, fig.width = 20, fig.height=10}
@@ -95,8 +187,8 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
   }
 
   pmat <- dge[mask, ] %>%
-    pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "pvalue") %>%
-    column_to_rownames("geneid") %>%
+    pivot_wider(id_cols = "id", names_from = "contrast", values_from = "pvalue") %>%
+    column_to_rownames("id") %>%
     as.data.frame()
   
   clist <- lapply(colnames(pmat), FUN = function(n) {rownames(pmat)[(pmat[, n] < padj_threshold) & (!is.na(pmat[, n]))]})
@@ -112,16 +204,19 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
 
   print(gg)
 
+  
+  stopifnot(FALSE)
+  I want all significant tests to have the same sign, instead of what we're doing now
   lfc <- dge[mask, ] %>%
-    mutate(sign_total = sign(log2FoldChange), sign_sig = ifelse(padj < padj_threshold, sign(log2FoldChange), NA)) %>%
-    group_by(geneid) %>%
+    mutate(sign_total = sign(lfc), sign_sig = ifelse(padj < padj_threshold, sign(lfc), NA)) %>%
+    group_by(id) %>%
     summarise(
-      lfc_mean = ifelse(all(is.na(log2FoldChange)), NA, mean(log2FoldChange, na.rm = TRUE)),
-      lfc_median = ifelse(all(is.na(log2FoldChange)), NA, median(log2FoldChange, na.rm = TRUE)),
-      lfc_iqr = ifelse(all(is.na(log2FoldChange)), NA, IQR(log2FoldChange, na.rm = TRUE)),
-      lfc_min = ifelse(all(is.na(log2FoldChange)), NA, min(log2FoldChange, na.rm = TRUE)),
-      lfc_max = ifelse(all(is.na(log2FoldChange)), NA, max(log2FoldChange, na.rm = TRUE)),
-      sign_total = ifelse(all(is.na(log2FoldChange)), NA, sum(sign_total, na.rm = TRUE)),
+      lfc_mean = ifelse(all(is.na(lfc)), NA, mean(lfc, na.rm = TRUE)),
+      lfc_median = ifelse(all(is.na(lfc)), NA, median(lfc, na.rm = TRUE)),
+      lfc_iqr = ifelse(all(is.na(lfc)), NA, IQR(lfc, na.rm = TRUE)),
+      lfc_min = ifelse(all(is.na(lfc)), NA, min(lfc, na.rm = TRUE)),
+      lfc_max = ifelse(all(is.na(lfc)), NA, max(lfc, na.rm = TRUE)),
+      sign_total = ifelse(all(is.na(lfc)), NA, sum(sign_total, na.rm = TRUE)),
       ntot = n(),
       sign_sig = sum(sign_sig, na.rm = TRUE),
       nsig = sum(abs(sign_sig), na.rm = TRUE),
@@ -135,9 +230,9 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
   adjpval <- fishcomb$adjpval
   names(adjpval) <- rownames(pmat)
   
-  lfc["meta_padj"] <- adjpval[lfc[["geneid"]]]
+  lfc["meta_padj"] <- adjpval[lfc[["id"]]]
   
-  clist[["meta"]] <- lfc %>% filter((meta_padj < padj_threshold) & consistent_sign) %>% select(geneid) %>% .[[1]]
+  clist[["meta"]] <- lfc %>% filter(!is.na(meta_padj), (meta_padj < padj_threshold) & consistent_sign) %>% select(id) %>% .[[1]]
   p <- upset(
     fromList(clist),
     order.by = "freq",
@@ -148,7 +243,7 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
   print(p)
   
   gg <- ggplot(
-    lfc %>% mutate(significant = consistent_sign & (meta_padj < 0.01)),
+    lfc %>% mutate(significant = consistent_sign & (meta_padj < padj_threshold)),
     aes(x=lfc_median, y=-log10(meta_padj))
   ) +
     geom_point(aes(x = ifelse(.data[["significant"]], NA, .data[["lfc_median"]]), y = ifelse(.data[["significant"]], NA, -log10(.data[["meta_padj"]]))), alpha = 0.2, size = 1.5, colour = "#E69F00") +
@@ -163,7 +258,7 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
   }
     
   for (n in names(clist)) {
-    lfc[n] <- lfc[["geneid"]] %in% clist[[n]]
+    lfc[n] <- lfc[["id"]] %in% clist[[n]]
   }
 
   
@@ -172,26 +267,19 @@ process_dge <- function(dge, set = NULL, padj_threshold = 0.01, sign_threshold =
 ```
 
 
-```{r, fig.height=10, fig.width=15}
+```{r}
 all_dges <- list()
 
-ipvsiv_contrasts <- dge %>% filter(contrast_group == "IPvsIV") %>% select(contrast_group, host1, host2) %>% unique()
+ipvsiv_contrasts <- ipvsiv %>% select(host1, host2) %>% unique()
 for (i in 1:nrow(ipvsiv_contrasts)) {
   row <- unlist(ipvsiv_contrasts[i,])
   print("")
   print("#####################################################################################")
   print(row)
-  
-  if (row["host1"] == "Bnap") {
-    dge_matches <- process_dge(dge, list("contrast_group" = "IPvsIV", "host1" = row["host1"], "host2" = row["host2"], "bioproject" = "PRJNA327437"))
-    all_dges[["IPvsIV_Bnap_PRJNA327437"]] <- dge_matches
-  
-    dge_matches <- process_dge(dge %>% filter(bioproject != "PRJNA327437"), list("contrast_group" = "IPvsIV", "host1" = row["host1"], "host2" = row["host2"]))
-    all_dges[["IPvsIV_Bnap"]] <- dge_matches
-  } else {
-    dge_matches <- process_dge(dge, list("contrast_group" = "IPvsIV", "host1" = row["host1"], "host2" = row["host2"]))
-    all_dges[[paste0("IPvsIV_", row["host1"])]] <- dge_matches
-  }
+
+  dge_matches <- process_dge(ipvsiv, list("contrast_group" = "IPvsIV", "host1" = row["host1"], "host2" = row["host2"]))
+  dge_matches[is.na(dge_matches$meta), "meta"] <- FALSE
+  all_dges[[paste0("IPvsIV_", row["host1"])]] <- dge_matches
 }
 
 writexl::write_xlsx(all_dges, path = "output/ipvsiv_meta.xlsx")
@@ -200,22 +288,23 @@ writexl::write_xlsx(all_dges, path = "output/ipvsiv_meta.xlsx")
 Ok. So we've run all of them.
 Let's look at the overall comparisons.
 
-```{r}
-ipvsiv <- lapply(all_dges, FUN = function(df) {
+```{r, fig.height=6, fig.width=8}
+ipvsiv_meta <- lapply(all_dges, FUN = function(df) {
   if ("bioproject" %in% colnames(df)) {
-    r <- df %>% select(geneid, meta, host1, host2, bioproject)
+    r <- df %>% select(id, meta, host1, host2, bioproject)
   } else {
-    r <- df %>% select(geneid, meta, host1, host2) %>% mutate(bioproject = NA)
+    r <- df %>% select(id, meta, host1, host2) %>% mutate(bioproject = NA)
   }
   return(r)
 }) %>% do.call(rbind, .)
 
-ipvsiv["contrast"] <- ifelse(is.na(ipvsiv$bioproject), paste0(ipvsiv$host1, "_vs_", ipvsiv$host2), paste0(ipvsiv$host1, "_vs_", ipvsiv$host2, "_", ipvsiv$bioproject)) 
+ipvsiv_meta["contrast"] <- ifelse(is.na(ipvsiv_meta$bioproject), paste0(ipvsiv_meta$host1, "_vs_", ipvsiv_meta$host2), paste0(ipvsiv_meta$host1, "_vs_", ipvsiv_meta$host2, "_", ipvsiv_meta$bioproject)) 
 
-ipvsiv <- ipvsiv %>% pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "meta") %>% column_to_rownames("geneid")
+ipvsiv_meta <- ipvsiv_meta %>% pivot_wider(id_cols = "id", names_from = "contrast", values_from = "meta") %>% column_to_rownames("id")
+ipvsiv_meta[is.na(ipvsiv_meta)] <- FALSE
 
-clist <- lapply(colnames(ipvsiv), FUN = function(col) {rownames(ipvsiv)[ipvsiv[[col]]]})
-names(clist) <- colnames(ipvsiv)
+clist <- lapply(colnames(ipvsiv_meta), FUN = function(col) {rownames(ipvsiv_meta)[ipvsiv_meta[[col]]]})
+names(clist) <- colnames(ipvsiv_meta)
 
 p <- upset(
   fromList(clist),
@@ -227,20 +316,45 @@ print(p)
 ```
 
 ```{r, fig.height=8, fig.width=8}
-heatmap(apply(ipvsiv[rowSums(ipvsiv) > 0, ], MARGIN=2, as.numeric), scale = "none")
+d <- dist(t(ipvsiv_meta[rowSums(ipvsiv_meta) > 1, ]), method = "binary")
+hcl <- hclust(d)
+plot(hcl)
+#heatmap(apply(ipvsiv_meta[rowSums(ipvsiv_meta) > 0, ], MARGIN=2, as.numeric), scale = "none")
 ```
+
+
+There are ~-80 genes that are DGE in all IPvsIV samples.
+What's going on there?
+
+
+```{r}
+funcs <- readr::read_tsv("input/predicted_protein_functions.tsv")
+
+DT::datatable(funcs %>% filter(name %in% rownames(ipvsiv_meta[apply(ipvsiv_meta, MARGIN = 1, FUN = all), ])) %>% select(name, effector_score, effectordb_name, phibase_genes, dbcan_description, swissprot_protein_name, pdb_protein_name, ipr_name))
+```
+
+Unsurpisingly, most things are CAZymes, but there are a few other things in there that are interesting.
+Including 1 known sclero effector and 1 homologue of BghBEC2.
+
+The homologue could be a lot of things, BEC2 is thought to interfere with host resistance.
+It's also homologous to some Magnaporthe CDIPs (cell death inducing proteins).
+And interestingly, it has similarity to a Copsin protein, which are antimicrobial.
 
 
 
 ## Time points.
 
+```{r}
+infection_stage <- dge$infection_stage
+head(infection_stage)
+```
+
 Let's look at some time-points!
 I'll start with the mid vs early time points
 
-
 ```{r}
-dge %>% filter(contrast_group == "MvsE") %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+infection_stage %>% filter(contrast_group == "MvsE") %>% group_by(contrast_group, contrast, host1) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -251,8 +365,8 @@ dge %>% filter(contrast_group == "MvsE") %>% group_by(contrast_group, contrast, 
 ```
 
 ```{r}
-dge %>% filter(contrast_group == "LvsE") %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+infection_stage %>% filter(contrast_group == "LvsE") %>% group_by(contrast_group, contrast, host1) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -263,8 +377,8 @@ dge %>% filter(contrast_group == "LvsE") %>% group_by(contrast_group, contrast, 
 ```
 
 ```{r}
-dge %>% filter(contrast_group == "LvsM") %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+infection_stage %>% filter(contrast_group == "LvsM") %>% group_by(contrast_group, contrast, host1) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -277,10 +391,11 @@ dge %>% filter(contrast_group == "LvsM") %>% group_by(contrast_group, contrast, 
 Right, so there are 4 species with time-series information.
 Most only have two different experiments (which is still enough to do something with).
 
+
 ```{r, fig.height = 10, fig.width = 15}
 all_dges2 <- list()
-
-timepoint_contrasts <- dge %>% filter(contrast_group %in% c("MvsE", "LvsE", "LvsM", "MvsERes", "LvsERes", "LvsMRes")) %>% select(contrast_group, host1) %>% unique()
+#%>% filter(contrast_group %in% c("MvsE", "LvsE", "LvsM"))
+timepoint_contrasts <- infection_stage  %>% select(contrast_group, host1) %>% unique()
 
 for (i in 1:nrow(timepoint_contrasts)) {
   row <- unlist(timepoint_contrasts[i,])
@@ -288,19 +403,18 @@ for (i in 1:nrow(timepoint_contrasts)) {
   print("#####################################################################################")
   print(row)
   
-  if ((row["host1"] == "Bnap") & any("PRJNA327437" %in% dge[(dge$contrast_group == row["contrast_group"]) & (dge$host1 == "Bnap"), ]$bioproject)) {
-    dge_matches <- process_dge(dge, list("contrast_group" = row["contrast_group"], "host1" = row["host1"], "bioproject" = "PRJNA327437"))
-    all_dges2[[paste(row["contrast_group"], row["host1"], "PRJNA327437", sep="_")]] <- dge_matches
-  
-    tmp <- dge %>% filter(bioproject != "PRJNA327437", contrast_group == row["contrast_group"], host1 == row["host1"])
-    if (nrow(tmp) > 0) {
-      dge_matches <- process_dge(tmp, list("contrast_group" = row["contrast_group"], "host1" = row["host1"]))
-      all_dges2[[paste(row["contrast_group"], row["host1"], sep="_")]] <- dge_matches
-    }
-  } else {
-    dge_matches <- process_dge(dge, list("contrast_group" = row["contrast_group"], "host1" = row["host1"]))
-    all_dges2[[paste(row["contrast_group"], row["host1"], sep="_")]] <- dge_matches
-  }
+  #if ((row["host1"] == "Bnap") & any("PRJNA327437" %in% dge[(dge$contrast_group == row["contrast_group"]) & (dge$host1 == "Bnap"), ]$bioproject)) {
+  #  dge_matches <- process_dge(dge, list("contrast_group" = row["contrast_group"], "host1" = row["host1"], "bioproject" = "PRJNA327437"))
+  #  all_dges2[[paste(row["contrast_group"], row["host1"], "PRJNA327437", sep="_")]] <- dge_matches
+  #
+  #  tmp <- dge %>% filter(bioproject != "PRJNA327437", contrast_group == row["contrast_group"], host1 == row["host1"])
+  #  if (nrow(tmp) > 0) {
+  #    dge_matches <- process_dge(tmp, list("contrast_group" = row["contrast_group"], "host1" = row["host1"]))
+  #    all_dges2[[paste(row["contrast_group"], row["host1"], sep="_")]] <- dge_matches
+  #  }
+  #} else {
+  dge_matches <- process_dge(infection_stage, list("contrast_group" = row["contrast_group"], "host1" = row["host1"]))
+  all_dges2[[paste(row["contrast_group"], row["host1"], sep="_")]] <- dge_matches
 }
 
 writexl::write_xlsx(all_dges2, path = "output/timepoint_meta.xlsx")
@@ -314,16 +428,16 @@ Let's look at the overall comparisons.
 ```{r, fig.height=9, fig.width=10}
 timepoints <- lapply(all_dges2, FUN = function(df) {
   if ("bioproject" %in% colnames(df)) {
-    r <- df %>% select(geneid, meta, contrast_group, host1, bioproject)
+    r <- df %>% select(id, meta, contrast_group, host1, bioproject)
   } else {
-    r <- df %>% select(geneid, meta, contrast_group, host1) %>% mutate(bioproject = NA)
+    r <- df %>% select(id, meta, contrast_group, host1) %>% mutate(bioproject = NA)
   }
   return(r)
 }) %>% do.call(rbind, .)
 
 timepoints["contrast"] <- ifelse(is.na(timepoints$bioproject), paste0(timepoints$contrast_group, "_", timepoints$host1), paste0(timepoints$contrast_group, "_", timepoints$host1, "_", timepoints$bioproject))
 
-timepoints <- timepoints %>% pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "meta") %>% column_to_rownames("geneid")
+timepoints <- timepoints %>% pivot_wider(id_cols = "id", names_from = "contrast", values_from = "meta") %>% column_to_rownames("id")
 
 clist <- lapply(colnames(timepoints), FUN = function(col) {rownames(timepoints)[timepoints[[col]]]})
 names(clist) <- colnames(timepoints)
@@ -337,16 +451,43 @@ p <- upset(
 print(p)
 ```
 
+
 ```{r, fig.height=8, fig.width=8}
-heatmap(apply(timepoints[rowSums(timepoints) > 0, ], MARGIN=2, as.numeric), scale = "none")
+d <- dist(t(ipvsiv_meta[rowSums(ipvsiv_meta) > 1, ]), method = "binary")
+hcl <- hclust(d)
+plot(hcl)
+#heatmap(apply(ipvsiv_meta[rowSums(ipvsiv_meta) > 0, ], MARGIN=2, as.numeric), scale = "none")
 ```
+
+```{r, fig.height=8, fig.width=8}
+d <- dist(t(apply(timepoints[rowSums(timepoints) > 0, ], MARGIN = 2, FUN = as.numeric)), method = "binary")
+hcl <- hclust(d)
+plot(hcl)
+#heatmap(apply(timepoints[rowSums(timepoints) > 0, ], MARGIN=2, as.numeric), scale = "none")
+```
+
+What i'm seeing is that generally there isn't much of a difference between Late vs early or mid infection.
+Probably late infection just has a lot going on (and more transcripts, so less bias).
+
+There's some consistency in how they group together, but generally within the same time-point and host.
+
+
+the Bnapus resistant samples are quite interesting.
+For most of the other timepoints comparing resistant samples they group with the susceptible cultivar.
+But it seems like the Brassicas actually do have a different response, and it's not just similar to an earlier time-point.
+
 
 ## Compare susceptible hosts vs resistant ones.
 
+```{r}
+resistance <- dge$resistance
+head(resistance)
+```
+
 
 ```{r}
-dge %>% filter(contrast_group == "SuscvsRes") %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+resistance %>% group_by(contrast_group, contrast, host1) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -361,33 +502,22 @@ all_dges3 <- list()
 ```
 
 
-```{r, fig.width = 20, fig.height=10}
-dge_matches <- process_dge(dge, list("contrast_group" = "SuscvsRes", "host1" = "Bnap"))
-all_dges3[[length(all_dges3) + 1]] <- dge_matches
-```
+```{r}
+dge_matches <- process_dge(resistance, list("contrast_group" = "SuscvsRes", "host1" = "Bnap"))
+all_dges3[["Bnap"]] <- dge_matches
 
+dge_matches <- process_dge(resistance, list("contrast_group" = "SuscvsRes", "host1" = "Gmax"))
+all_dges3[["Gmax"]] <- dge_matches
 
-```{r, fig.width = 20, fig.height=10}
-dge_matches <- process_dge(dge, list("contrast_group" = "SuscvsRes", "host1" = "Gmax"))
-all_dges3[[length(all_dges3) + 1]] <- dge_matches
-```
+dge_matches <- process_dge(resistance, list("contrast_group" = "SuscvsRes", "host1" = "Cari"))
+all_dges3[["Cari"]] <- dge_matches
 
+dge_matches <- process_dge(resistance, list("contrast_group" = "SuscvsRes", "host1" = "Lsat"))
+all_dges3[["Lsat"]] <- dge_matches
 
-```{r, fig.width = 20, fig.height=10}
-dge_matches <- process_dge(dge, list("contrast_group" = "SuscvsRes", "host1" = "Cari"))
-all_dges3[[length(all_dges3) + 1]] <- dge_matches
-```
-
-
-```{r, fig.width = 20, fig.height=15}
-dge_matches <- process_dge(dge, list("contrast_group" = "SuscvsRes", "host1" = "Lsat"))
-all_dges3[[length(all_dges3) + 1]] <- dge_matches
-```
-
-
-```{r, fig.width = 20, fig.height=10}
-dge_matches <- process_dge(dge, list("contrast_group" = "SuscvsRes", "host1" = "Psat"))
-all_dges3[[length(all_dges3) + 1]] <- dge_matches
+# NO DGEs, so this fails if you run it.
+#dge_matches <- process_dge(resistance, list("contrast_group" = "SuscvsRes", "host1" = "Psat"))
+#all_dges3[["Psat"]] <- dge_matches
 ```
 
 
@@ -411,16 +541,16 @@ writexl::write_xlsx(all_dges3, path = "output/susc_vs_res_meta.xlsx")
 ```{r}
 suscvsres <- lapply(all_dges3, FUN = function(df) {
   if ("bioproject" %in% colnames(df)) {
-    r <- df %>% select(geneid, meta, contrast_group, host1, bioproject)
+    r <- df %>% select(id, meta, contrast_group, host1, bioproject)
   } else {
-    r <- df %>% select(geneid, meta, contrast_group, host1) %>% mutate(bioproject = NA)
+    r <- df %>% select(id, meta, contrast_group, host1) %>% mutate(bioproject = NA)
   }
   return(r)
 }) %>% do.call(rbind, .)
 
 suscvsres["contrast"] <- ifelse(is.na(suscvsres$bioproject), paste0(suscvsres$contrast_group, "_", suscvsres$host1), paste0(suscvsres$contrast_group, "_", suscvsres$host1, "_", suscvsres$bioproject))
 
-suscvsres <- suscvsres %>% pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "meta") %>% column_to_rownames("geneid")
+suscvsres <- suscvsres %>% pivot_wider(id_cols = "id", names_from = "contrast", values_from = "meta") %>% column_to_rownames("id")
 
 clist <- lapply(colnames(suscvsres), FUN = function(col) {rownames(suscvsres)[suscvsres[[col]]]})
 names(clist) <- colnames(suscvsres)
@@ -434,8 +564,11 @@ p <- upset(
 print(p)
 ```
 
-```{r, fig.height=8, fig.width=8}
-heatmap(apply(suscvsres[rowSums(suscvsres) > 0, ], MARGIN=2, as.numeric), scale = "none")
+Weirdly, the brassica napus has lost it's interesting Susceptibility vs Resistance differences that we saw in in the time-points...
+
+
+```{r}
+#heatmap(apply(suscvsres[rowSums(suscvsres) > 0, ], MARGIN=2, as.numeric), scale = "none")
 ```
 
 
@@ -443,52 +576,11 @@ heatmap(apply(suscvsres[rowSums(suscvsres) > 0, ], MARGIN=2, as.numeric), scale 
 ### Host vs Host
 
 
-```{r, fig.width=12, fig.height=7}
-plant_vs_plant <- c(
-  'AthavsBvulvul',
-  'AthavsHann',
-  'AthavsPvul',
-  'AthavsRcom',
-  'AthavsSlys',
-  'BnapvsBole',
-  'BnapvsBrap',
-  'BnapvsLang',
-  'BolevsBnap',
-  'BolevsBrap',
-  'BolevsBvil',
-  'BrapvsBnap',
-  'BrapvsBole',
-  'BvilvsBole',
-  'BvulvulvsAtha',
-  'BvulvulvsHann',
-  'BvulvulvsPvul',
-  'BvulvulvsRcom',
-  'BvulvulvsSlys',
-  'HannvsAtha',
-  'HannvsBvulvul',
-  'HannvsPvul',
-  'HannvsRcom',
-  'HannvsSlys',
-  'LangvsBnap',
-  'PvulvsAtha',
-  'PvulvsBvulvul',
-  'PvulvsHann',
-  'PvulvsRcom',
-  'PvulvsSlys',
-  'RcomvsAtha',
-  'RcomvsBvulvul',
-  'RcomvsHann',
-  'RcomvsPvul',
-  'RcomvsSlys',
-  'SlysvsAtha',
-  'SlysvsBvulvul',
-  'SlysvsHann',
-  'SlysvsPvul',
-  'SlysvsRcom'
-)
+```{r}
+hosts <- dge$host %>% filter(contrast_group  != "IPvsIV")
 
-dge %>% filter(contrast_group %in% plant_vs_plant) %>% group_by(contrast_group, contrast, sample1, sample2, host1, host2) %>%
-  summarise(up = sum((padj < 0.01) & (log2FoldChange > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (log2FoldChange < 0), na.rm = TRUE)) %>%
+hosts %>% group_by(contrast_group, contrast, host1, host2) %>%
+  summarise(up = sum((padj < 0.01) & (lfc > 0), na.rm = TRUE),  down = sum((padj < 0.01) & (lfc < 0), na.rm = TRUE)) %>%
   pivot_longer(cols = c("up", "down"), names_to = "direction", values_to = "count") %>%
   ggplot(aes(x = contrast, y = count, fill = direction)) +
   geom_bar(stat="identity") +
@@ -498,15 +590,16 @@ dge %>% filter(contrast_group %in% plant_vs_plant) %>% group_by(contrast_group, 
         axis.ticks.x=element_blank())
 ```
 
+
 ```{r, fig.width = 15, fig.height=10}
 all_dges4 <- list()
-
-for (l in plant_vs_plant) {
+hosts
+for (l in unique(hosts$contrast_group)) {
   print("")
   print("######################################################################################")
   print(l)
   n <- strsplit(l, "vs")[[1]]
-  dge_matches <- process_dge(dge, list("contrast_group" = l, "host1" = n[1], "host2" = n[2]))
+  dge_matches <- process_dge(hosts, list("contrast_group" = l, "host1" = n[1], "host2" = n[2]))
   all_dges4[[l]] <- dge_matches
 }
 writexl::write_xlsx(all_dges4, path = "output/hostvshost_meta.xlsx")
@@ -514,19 +607,19 @@ writexl::write_xlsx(all_dges4, path = "output/hostvshost_meta.xlsx")
 Ok. So we've run all of them.
 Let's look at the overall comparisons.
 
-```{r, fig.height=12, fig.width=15}
+```{r, fig.height=15, fig.width=12}
 hostvshost <- lapply(all_dges4, FUN = function(df) {
   if ("bioproject" %in% colnames(df)) {
-    r <- df %>% select(geneid, meta, contrast_group, host1, host2, bioproject)
+    r <- df %>% select(id, meta, contrast_group, host1, host2, bioproject)
   } else {
-    r <- df %>% select(geneid, meta, contrast_group, host1, host2) %>% mutate(bioproject = NA)
+    r <- df %>% select(id, meta, contrast_group, host1, host2) %>% mutate(bioproject = NA)
   }
   return(r)
 }) %>% do.call(rbind, .)
 
 hostvshost["contrast"] <- ifelse(is.na(hostvshost$bioproject), hostvshost$contrast_group, paste0(hostvshost$contrast_group, "_", hostvshost$bioproject))
 
-hostvshost <- hostvshost %>% pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "meta") %>% column_to_rownames("geneid")
+hostvshost <- hostvshost %>% pivot_wider(id_cols = "id", names_from = "contrast", values_from = "meta") %>% column_to_rownames("id")
 
 clist <- lapply(colnames(hostvshost), FUN = function(col) {rownames(hostvshost)[hostvshost[[col]]]})
 names(clist) <- colnames(hostvshost)
@@ -541,26 +634,29 @@ print(p)
 ```
 
 ```{r, fig.height=8, fig.width=8}
-heatmap(apply(hostvshost[rowSums(hostvshost) > 0, ], MARGIN=2, as.numeric), scale = "none")
+d <- dist(t(apply(hostvshost[rowSums(timepoints) > 1, ], MARGIN = 2, FUN = as.numeric)), method = "binary")
+hcl <- hclust(d)
+plot(hcl)
+
+#heatmap(apply(hostvshost[rowSums(hostvshost) > 0, ], MARGIN=2, as.numeric), scale = "none")
 ```
 
 
+
+
+## Virus
+
 ```{r, fig.width = 15, fig.height=10}
-virus_contrasts <- c(
-  "SlaGemV1vsVF",
-  "SsHADVvsVF",
-  "SsNRSVvsVF",
-  "SsNRSVSsHVvsVF"
-)
+virus <- dge$virus
 
 all_dges5 <- list()
 
-for (l in virus_contrasts) {
+for (l in unique(virus$contrast_group)) {
   print("")
   print("######################################################################################")
   print(l)
 
-  dge_matches <- process_dge(dge, list("contrast_group" = l))
+  dge_matches <- process_dge(virus, list("contrast_group" = l))
   all_dges5[[l]] <- dge_matches
 }
 
@@ -575,16 +671,16 @@ I guess I'd expect to still see some consistent differences between IV and IP co
 ```{r, fig.height=8, fig.width=10}
 virus <- lapply(all_dges5, FUN = function(df) {
   if ("bioproject" %in% colnames(df)) {
-    r <- df %>% select(geneid, meta, contrast_group, bioproject)
+    r <- df %>% select(id, meta, contrast_group, bioproject)
   } else {
-    r <- df %>% select(geneid, meta, contrast_group) %>% mutate(bioproject = NA)
+    r <- df %>% select(id, meta, contrast_group) %>% mutate(bioproject = NA)
   }
   return(r)
 }) %>% do.call(rbind, .)
 
 virus["contrast"] <- virus$contrast_group
 
-virus <- virus %>% pivot_wider(id_cols = "geneid", names_from = "contrast", values_from = "meta") %>% column_to_rownames("geneid")
+virus <- virus %>% pivot_wider(id_cols = "id", names_from = "contrast", values_from = "meta") %>% column_to_rownames("id")
 
 clist <- lapply(colnames(virus), FUN = function(col) {rownames(virus)[virus[[col]]]})
 names(clist) <- colnames(virus)
@@ -596,10 +692,6 @@ p <- upset(
   nintersects = 50
 )
 print(p)
-```
-
-```{r, fig.height=8, fig.width=8}
-heatmap(apply(virus[rowSums(virus) > 0, ], MARGIN=2, as.numeric), scale = "none")
 ```
 
 

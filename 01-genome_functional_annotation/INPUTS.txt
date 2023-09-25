@@ -35,3 +35,14 @@ Code has touched these files:
 - MODIFIED: output/predector_genome/Scscl_1980-proteins.gff3.gz.gzi (sha256:75c427efaa1f573765e3e90ef07d8c749dbc3dbca2881a88adff0b27f0d575b2)
 - MODIFIED: output/predector_genome/Scscl_1980-proteins.gff3.gz.tbi (sha256:a4c931075d7f86fc4991b3420c3f6e9f14f1a78999b1573449d73cb79740721a)
 - MODIFIED: slurm-48964221.out (sha256:59e2df337ad4c25aa93a3c515f3b35652fbbbbd78e8b433b5230d8d2ef078d27)
+
+## Added input at 20230801-133508
+
+script to run R program
+
+```
+wget -O code/decipher.R https://raw.githubusercontent.com/darcyabjones/pclust/master/bin/run_decipher.R
+```
+
+Code has touched these files:
+- NEW: code/decipher.R (sha256:d20aa0c7985c78a4cb3b009d14aa2484877209bee65c01f2f41a7a21f1b49d5c)

@@ -11,3 +11,4 @@ input/sra_rnaseq\.tsv
 Sscl1980-protein\.faa\.gz
 input/Sscl1980-mRNA\.gff3\.gz
 input/Sscl1980-nuclear\.fasta\.gz\.fai
+code/decipher\.R

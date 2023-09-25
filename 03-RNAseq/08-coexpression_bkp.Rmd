@@ -12,8 +12,10 @@ knitr::opts_chunk$set(echo = TRUE)
 ```{r}
 library("tidyverse")
 library("UpSetR")
+library("edgeR")
 library("igraph")
 library("ppcor")
+source("code/PCAtest.R")
 ```
 
 ```{r}
@@ -80,7 +82,7 @@ It may be fine if we use a metric that is unaffected by size (only correlation),
 
 So i'll have a look at out data to see if we need to normalise.
 
-```{r, fig.height=10, fig.width=10}
+```
 ggplot(counts, aes(x = gene_length, y = count)) +
   geom_point(size = 1, alpha = 0.6) +
   facet_wrap(vars(bioproject))
@@ -89,7 +91,7 @@ ggplot(counts, aes(x = gene_length, y = count)) +
 There's a slight tendency for longer genes to have higher values.
 The smaller genes make up the majority of genes with high expression, but this is really just because large genes are very rare.
 
-```{r, fig.height=10, fig.width=10}
+```
 ggplot(counts, aes(x = gene_length, y = count)) +
   geom_point(size = 1, alpha = 0.6) +
   xlim(0, 2000) +
@@ -100,14 +102,14 @@ ggplot(counts, aes(x = gene_length, y = count)) +
 So i'll divide the count by the gene length in kilobases.
 This is roughly analogous to the common FPKM metric.
 
-```{r, fig.height=10, fig.width=10}
+```
 ggplot(counts, aes(x = gene_length, y = count / (gene_length / 1000))) +
   geom_point(size = 1, alpha = 0.6) +
   facet_wrap(vars(bioproject))
 ```
 
 
-```{r, fig.height=10, fig.width=10}
+```
 ggplot(counts, aes(x = gene_length, y = count / (gene_length / 1000))) +
   geom_point(size = 1, alpha = 0.6) +
   xlim(0, 2000) +
@@ -118,6 +120,160 @@ ggplot(counts, aes(x = gene_length, y = count / (gene_length / 1000))) +
 I think actually that the unnormalised data looks ok.
 And peaks we get at the lower values in the "normalised" counts worries me a bit.
 It's probably fine either way, but I'll go with the unnormalised ones.
+
+
+
+
+```{r}
+this_counts <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+this_meta <- meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample), bioproject = factor(bioproject)) %>% .[colnames(this_counts), ]
+stopifnot(all(rownames(this_meta) == colnames(this_counts)))
+
+dds <- DESeqDataSetFromMatrix(
+  countData = this_counts,
+  colData = this_meta,
+  design = ~ sample
+)
+```
+
+
+```{r}
+corcounts <- vst(dds, blind = FALSE)
+norm_counts_df <- assay(corcounts)
+
+if ("disp_norm_count" %in% lcounts) {
+  lcounts <- lcounts %>% select(-disp_norm_count)
+}
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(norm_counts_df) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "disp_norm_count"),
+  by = c("sra", "id")
+)
+
+```
+
+
+```{r}
+pca_raw <- princomp(norm_counts_df, fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+```{r, fig.width = 10, fig.height = 10}
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+```{r}
+apply_tmm <- function(df) {
+  # See: https://link.springer.com/article/10.1186/s13059-021-02568-9
+  norm_factors <- calcNormFactors(df, method = "TMM")
+  return((df - colMedians(df, na.rm = TRUE)) / norm_factors)
+}
+
+norm_counts_df_tmm <- apply_tmm(norm_counts_df)
+
+if ("disp_norm_count_tmm" %in% lcounts) {
+  lcounts <- lcounts %>% select(-disp_norm_count_tmm)
+}
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(norm_counts_df_tmm) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "disp_norm_count_tmm"),
+  by = c("sra", "id")
+)
+
+
+pca_raw <- princomp(norm_counts_df_tmm, fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+```{r, fig.width = 10, fig.height = 10}
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
 
 
 ```{r}
@@ -131,13 +287,21 @@ gen_count_matrix <- function(df) {
   return(df)
 }
 
-cor.test.p <- function(x, method = "pearson") {
+cor.test.p <- function(x, direction = "both", method = "pearson") {
+  stopifnot(direction %in% c("up", "down", "both"))
+  stopifnot(method %in% c("pearson", "spearman"))
   n <- (!is.na(x)) %*% t(!is.na(x))
   r <- cor(t(x), method = method, use = "pairwise.complete.obs")
   
   if (method %in% c("pearson", "spearman")) {
     t <- (r * sqrt(n - 2)) / sqrt(1 - r^2)
-    p <- 2 * (1 - pt(abs(t), (n - 2)))
+    if (direction == "up") {
+      p <- pt(t, (n - 2), lower.tail = FALSE)
+    } else if (direction == "down") {
+      p <- pt(t, (n - 2), lower.tail = TRUE)
+    } else {
+      p <- 2 * pt(abs(t), (n - 2), lower.tail = FALSE)
+    }
   } else if (method == "kendall") {
     p <- NULL
   } else {
@@ -195,14 +359,51 @@ collapse_approx_duplicates <- function(mat, method = "pearson", precision = (1 -
 ```
 
 ```{r, warning=FALSE}
-ctest <- gen_count_matrix(counts %>% filter(host_tidyname == "Psat"))
+ctest <- gen_count_matrix(counts %>% filter(host_tidyname == "Atha"))
 
 ctest <- collapse_duplicates(ctest)
 ctest <- collapse_approx_duplicates(ctest)
+gene_sds <- apply(ctest, MARGIN = 1, FUN = sd)
 
-ctp1 <- cor.test.p(ctest)
+ctest <- ctest[(!is.na(gene_sds)) & (gene_sds > 0) & (rowSums(ctest, na.rm = TRUE) > 0), ]
+
+# See: https://link.springer.com/article/10.1186/s13059-021-02568-9
+norm_factors <- calcNormFactors(ctest)
+ctest <- (ctest - colMeans(ctest)) / norm_factors
+
+
+npcs  <- PCAtest(ctest)$nsig
+
+ctest_pca <- prcomp(ctest)$x[, 1:npcs]
+ctp1 <- cor.test.p(ctest_pca, direction = "up")
 ctp1[1:5, 1:5]
 ```
+
+
+
+```{r}
+library("parmigene")
+```
+
+```{r}
+mi <- knnmi.all(mat = ctest_pca, k = 3)
+mi[1:5, 1:5]
+```
+
+```{r}
+clr_mi <- clr(mi)
+#clr_mi <- clr_mi / max(clr_mi)
+```
+
+```{r}
+heatmap(clr_mi[1:1000, 1:1000], symm = TRUE, scale = "none")
+```
+
+```{r}
+clr_pvals <- 2 * pnorm(clr_mi, lower.tail = FALSE)
+heatmap(clr_pvals[1:100, 1:100], symm = TRUE, scale = "none")
+```
+
 
 ```{r}
 unify <- function(m) {
@@ -228,22 +429,26 @@ p.adjust.square <- function(mat, method = "BH") {
 }
 
 ctp1_adj <- p.adjust.square(ctp1)
+#ctp1_adj <- p.adjust.square(clr_pvals)
 ctp1_adj[1:5, 1:5]
 ```
 
 
-
-
-
 ```{r}
-ctpl <- ctp1_adj <= 1e-2
+ctpl <- ctp1_adj <= 0.01
 ctpl[is.na(ctpl)] <- FALSE
-ctpl[1:5, 1:5]
+ctp1_adj_trimmed <- -log(ctp1_adj)
+#ctp1_adj_trimmed <- 1 - ctp1_adj
+#ctp1_adj_trimmed[!ctpl] <- 0
+ctp1_adj_trimmed[!is.finite(ctp1_adj_trimmed)] <- max(ctp1_adj_trimmed[is.finite(ctp1_adj_trimmed)])
+ctp1_adj_trimmed[1:5, 1:5]
 ```
 
 
 ```{r}
-adj <- graph_from_adjacency_matrix(ctpl, mode = "undirected", diag = FALSE)
+adj <- graph_from_adjacency_matrix(ctp1_adj_trimmed, mode = "undirected", diag = FALSE, weighted = TRUE)
+#adj <- graph_from_adjacency_matrix(ctpl, mode = "undirected", diag = FALSE, weighted = TRUE)
+#adj <- graph_from_adjacency_matrix(clr_mi, mode = "undirected", diag = FALSE, weighted = TRUE)
 adj
 ```
 
@@ -256,7 +461,7 @@ tmp3[order(tmp3$`n_distinct(id)`, decreasing = TRUE), ]
 
 
 ```{r}
-cluster <- tmp2 %>% filter(component == 35) %>% dplyr::select(id) %>% .[[1]]
+cluster <- tmp2 %>% filter(component == 18) %>% dplyr::select(id) %>% .[[1]]
 ctest2 <- ctest[rownames(ctest) %in% cluster, ]
 heatmap(ctest2, col = heat.colors(50))
 
@@ -265,10 +470,35 @@ legend(x="bottomright", legend = c(min(ctest2), mean(ctest2), max(ctest2)), fill
 
 
 ```{r}
-tmp <- cor(t(ctest2))
-heatmap(tmp, symm = TRUE, col = heat.colors(50))
+clusters <- cluster_leiden(adj)
+tmp2 <- data.frame(id = attr(V(adj), "names"), component = clusters$membership)
+tmp3 <- tmp2 %>% group_by(component) %>% summarise(n_distinct(id))
+tmp3[order(tmp3$`n_distinct(id)`, decreasing = TRUE), ]
+```
 
-legend(x="bottomright", legend = c(min(tmp), mean(tmp), max(tmp)), fill=heat.colors(3))
+```{r}
+cluster <- tmp2 %>% filter(component == 20) %>% dplyr::select(id) %>% .[[1]]
+ctest2 <- ctest_pca[rownames(ctest_pca) %in% cluster, ]
+heatmap(ctest2, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest2), mean(ctest2), max(ctest2)), fill=heat.colors(3))
+```
+
+```{r}
+cluster <- tmp2 %>% filter(component == 32) %>% dplyr::select(id) %>% .[[1]]
+ctest2 <- ctest_pca[rownames(ctest_pca) %in% cluster, ]
+heatmap(ctest2, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest2), mean(ctest2), max(ctest2)), fill=heat.colors(3))
+```
+
+
+```{r}
+cluster <- tmp2 %>% filter(component == 11) %>% dplyr::select(id) %>% .[[1]]
+ctest2 <- ctest_pca[rownames(ctest_pca) %in% cluster, ]
+heatmap(ctest2, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest2), mean(ctest2), max(ctest2)), fill=heat.colors(3))
 ```
 
 
@@ -276,45 +506,75 @@ legend(x="bottomright", legend = c(min(tmp), mean(tmp), max(tmp)), fill=heat.col
 p <- pcor(t(ctest2), method = "spearman")
 pestimate <- p$estimate
 colnames(pestimate) <- rownames(pestimate) <- rownames(ctest2)
-heatmap(pestimate, symm = TRUE, col = heat.colors(50))
+heatmap(pestimate[1:100, 1:100], symm = TRUE, col = heat.colors(50))
 legend(x="bottomright", legend = c(min(p$estimate), mean(p$estimate), max(p$estimate)), fill=heat.colors(3))
 ```
 
-```{r}
-pstat <- replace(p$statistic, is.na(p$statistic), min(p$statistic, na.rm = TRUE))
-#pstat <- 2 * pt(pstat, p$n - 2)
-colnames(pstat) <- rownames(pstat) <- rownames(ctest2)
 
-heatmap(pstat, symm = TRUE, na.rm = TRUE, col = heat.colors(50))
-legend(x="bottomright", legend = c(min(pstat, na.rm = TRUE), mean(pstat, na.rm = TRUE), max(pstat, na.rm = TRUE)), fill=heat.colors(3))
+
+```{r}
+#unify <- function(m) {
+#    m[lower.tri(m)] <- t(m)[lower.tri(m)]
+#    m
+#}
+
+d <- p$statistic
+rownames(d) <- colnames(d) <- rownames(ctest2)
+
+print(d[1:5, 1:5])
+d[lower.tri(d)] <- ifelse(is.na(d[lower.tri(d)]), t(d)[lower.tri(d)], d[lower.tri(d)])
+d[upper.tri(d)] <- ifelse(is.na(d[upper.tri(d)]), t(d)[upper.tri(d)], d[upper.tri(d)])
+#d[is.na(d)] <- 0
+#heatmap(d[1:100, 1:100], symm = TRUE, scale = "none")
+
+diag(d) <- NaN
+#d[is.na(d)] <- 0
+#d[d < 0] <- NaN
+d[1:5, 1:5]
 ```
 
 ```{r}
-unify_pcor <- function(mat) {
-  out <- matrix(NA, ncol = ncol(mat), nrow = nrow(mat))
-  colnames(out) <- rownames(out) <- rownames(mat)
-  
-  lower <- as.vector(mat[lower.tri(mat)])
-  upper <- as.vector(t(mat)[lower.tri(mat)])
-
-  out[lower.tri(out)] <- ifelse(is.na(upper), lower, upper)
-  return(out)
-}
-
-pstat <- p$statistic 
-#pstat <- replace(pstat, is.na(pstat), min(pstat, na.rm = TRUE))
-#pstat <- 2 * pt(pstat, p$n - 2)
-colnames(pstat) <- rownames(pstat) <- rownames(ctest2)
-
-pstat2 <- unify_pcor(pstat)
-diag(pstat2) <- 0
-
-pstat2 <- replace(pstat2, is.na(pstat2), min(pstat2, na.rm = TRUE))
-
-heatmap(pstat2, symm = TRUE, na.rm = TRUE, col = heat.colors(50))
-legend(x="bottomright", legend = c(min(pstat2, na.rm = TRUE), mean(pstat2, na.rm = TRUE), max(pstat2, na.rm = TRUE)), fill=heat.colors(3))
+all_missing <- !apply(is.na(d), MARGIN = 1, FUN = all)
+sum(all_missing)
+d2 <- d[all_missing, all_missing]
+d2[is.na(d2)] <- 0
+pvals <- 2 * pt(abs(d2), ncol(d2) - 2, lower.tail = FALSE)
+heatmap(pvals[1:100, 1:100], symm = TRUE, scale = "none")
 ```
 
+```{r}
+dist_ <- dist(pvals)
+hcl <- hclust(dist_)
+heatmap(ctest2[all_missing,], Rowv = as.dendrogram(hcl))
+```
+
+```{r}
+adj <- graph_from_adjacency_matrix(pvals, mode = "undirected", diag = FALSE, weighted = TRUE)
+adj
+```
+
+```{r}
+clusters <- cluster_louvain(adj)
+tmp2 <- data.frame(id = attr(V(adj), "names"), component = clusters$membership)
+tmp3 <- tmp2 %>% group_by(component) %>% summarise(n_distinct(id))
+tmp3[order(tmp3$`n_distinct(id)`, decreasing = TRUE), ]
+```
+
+```{r}
+cluster <- tmp2 %>% filter(component == 1) %>% dplyr::select(id) %>% .[[1]]
+ctest3 <- ctest_pca[rownames(ctest_pca) %in% cluster, ]
+heatmap(ctest3, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest3), mean(ctest3), max(ctest3)), fill=heat.colors(3))
+```
+
+```{r}
+cluster <- tmp2 %>% filter(component == 2) %>% dplyr::select(id) %>% .[[1]]
+ctest3 <- ctest_pca[rownames(ctest_pca) %in% cluster, ]
+heatmap(ctest3, col = heat.colors(50))
+
+legend(x="bottomright", legend = c(min(ctest3), mean(ctest3), max(ctest3)), fill=heat.colors(3))
+```
 
 
 ```{r}
@@ -322,8 +582,8 @@ library(ica)
 ```
 
 ```{r}
-m <- ica(t(ctest), 8, method = "jade")
-heatmap(m$S, scale = "none")
+m <- ica(ctest, 8, method = "jade")
+heatmap(m$S[1:1000,], scale = "none")
 ```
 
 ```{r}

@@ -1,0 +1,741 @@
+---
+title: "XX-count_normalisation"
+output: html_document
+date: "2023-07-21"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+The first think is to load the data and see what we're dealing with.
+
+```{r}
+library(tidyverse)
+# library(ruv)
+library(DESeq2) # bioconductor
+library(vsn) # bioconductor
+library(edgeR) # bioconductor
+library(ggplot2)
+library(ggrepel)
+library(ggExtra)
+library(scales)
+library(HTSFilter) # bioconductor
+library(sva) # bioconductor
+library("UpSetR")
+
+library(ComplexHeatmap) # bioconductor
+```
+
+
+```{r}
+ggplot2::theme_set(ggplot2::theme_bw() +
+  ggplot2::theme(
+    strip.background = element_rect(
+     color="black", fill="white", linewidth=0, linetype="solid"
+    ),
+    rect = element_rect(
+      colour = "black",
+      linewidth = 1,
+      linetype = "solid"
+    )
+  )
+)
+
+okabe <- c('#000000', '#E69F00', '#56B4E9', '#009E73', '#F0E042', '#0072B2', '#D55E00', '#CC79A7', '#999999')
+options(ggplot2.discrete.fill = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+options(ggplot2.discrete.colour = list(okabe[seq(2, 9, 2)], okabe[2:8], okabe, rep(okabe, 10)))
+
+gg_shape <- function(gg, vals) {gg + scale_shape_manual(values = rep(c(15, 17:20), 100))}
+```
+
+
+```{r}
+counts_raw <- readr::read_delim("output/feature_counts.tsv", delim = "\t") %>%
+  mutate(Geneid = str_remove(Geneid, "gene-"))
+head(counts_raw)
+```
+
+```{r}
+counts <- counts_raw %>%
+  mutate(id=Geneid, length = Length) %>%
+  select(-Chr, -Start, -End, -Strand, -Length, -Geneid)
+
+# There must be a more elegant way to do this...
+counts <- counts[, c("id", "length", colnames(counts)[!colnames(counts) %in% c("id", "length")])]
+rm(counts_raw)
+
+# I also want to exclude anything that isn't highly expressed anywhere.
+# If all samples have fewer than 10 fragments, we skip the row.
+counts <- counts[!apply(counts[, -c(1, 2)] < 10, MARGIN = 1, FUN = all), ]
+dim(counts)
+head(counts)
+```
+
+
+```{r}
+meta <- readr::read_delim("input/sra_rnaseq2.tsv", delim = "\t", na = "-") %>%
+  mutate(
+    host_ = paste0(host_tidyname, host_accession_tidyname),
+    organism_ = paste0(organism_tidyname, accession_tidyname),
+  ) %>%
+  filter(organism != "Sclerotinia trifoliorum")
+
+head(meta)
+```
+
+```{r}
+virus_mapper <- c("DT8SsHADV" = "SsHADV", "DT8" = "VF", "Z113OXSsNSRV1" = "SsNSRV1", "Z11OXSsNSRV1" = "SsNSRV1", "AH98" = "SsNSRV1", "1980" = "VF", "DK3SlaGemV1" = "SlaGemV1", "DK3" = "VF")
+
+meta <- meta %>% mutate(
+  infection_stage = case_when(
+    (host_tidyname == "Psat") & (hpi < 24) ~ "E",
+    (host_tidyname == "Psat") & (24 <= hpi) & (hpi < 48) ~ "M",
+    (host_tidyname == "Psat") & (48 <= hpi) ~ "L",
+    (host_tidyname == "Gmax") & (hpi < 48) ~ "E",
+    (host_tidyname == "Gmax") & (48 <= hpi) & (hpi < 96) ~ "M",
+    (host_tidyname == "Gmax") & (96 <= hpi) ~ "L",
+    (host_tidyname == "Bnap") & (hpi < 12) ~ "E",
+    (host_tidyname == "Bnap") & (12 <= hpi) & (hpi < 48) ~ "M",
+    (host_tidyname == "Bnap") & (48 <= hpi) ~ "L",
+    (host_tidyname == "Cari") & (hpi < 24) ~ "E",
+    (host_tidyname == "Cari") & (24 <= hpi) & (hpi < 24) ~ "M",
+    (host_tidyname == "Cari") & (72 <= hpi) ~ "L",
+    TRUE ~ NA
+  ),
+  resistance = case_when(
+    (host_tidyname == "Psat") & (host_accession == "Lifter") ~ "Susc",
+    (host_tidyname == "Psat") & (host_accession == "PI240515") ~ "Res",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "9144") ~ "Susc",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "91145") ~ "Res",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "ACColibri") ~ "Susc",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "ACColibriOA") ~ "Res",
+    (host_tidyname == "Cari") & (host_accession_tidyname == "Kyabra") ~ "Susc",
+    (host_tidyname == "Cari") & (host_accession_tidyname == "HatTrick") ~ "Res",
+    (host_tidyname == "Bnap") & (host_accession_tidyname == "NingRS1") ~ "Res",
+    (host_tidyname == "Bnap") & (host_accession_tidyname == "1703") ~ "Res",
+    (host_tidyname == "Lsat") & (host_accession_tidyname %in% c("RedGranoble", "58", "Pallone", "OakLeaf", "KaiserSelbstschluss", "Kahu", "CobhamGreen", "BloodyWarrior", "Ambassador", "Adriatica2", "68", "Simpson", "Saladin", "RomainDeBenicardo")) ~ "Susc",
+    (host_tidyname == "Lsat") & (host_accession_tidyname %in% c("Prazan", "Iceberg", "BataviaTezier", "Aspen")) ~ "Res",
+    TRUE ~ NA  
+  ),
+  virus = ifelse(accession_tidyname %in% names(virus_mapper), virus_mapper[accession_tidyname], NA)
+) %>% mutate(
+  infection_stage = factor(ifelse((!is.na(resistance)) & (!is.na(infection_stage)) & (resistance == "Res"), paste0(infection_stage, "Res"), infection_stage))
+) %>% mutate(
+  sample = factor(sample),
+  host_tidyname = factor(host_tidyname),
+  infection_stage = factor(infection_stage),
+  resistance = factor(resistance),
+  virus = factor(virus),
+  hpi = factor(hpi),
+  ipvsivtp = factor(ifelse(host_tidyname == "IV", "IV", ifelse(is.na(infection_stage), NA, paste0(host_tidyname, "_", infection_stage))))
+)
+
+head(meta %>% select(sra, bioproject, host_tidyname, sample, infection_stage, resistance, virus, ipvsivtp))
+```
+
+
+```{r}
+meta <- meta[meta$included %in% c("TRUE", "NETWORK_ONLY"), ]
+
+lcounts <- dplyr::inner_join(
+  meta,
+  tidyr::pivot_longer(counts, -c(id, length), names_to = "sra", values_to = "count"),
+  by = "sra"
+) %>% mutate(
+  cpm = count / (n_fragments_aligned / 1000000),
+  rpk = count / (length / 1000)
+) %>%
+  select(-platform, -read_length, -strategy, -stranded, -n_fragments, -n_fragments_filtered, -n_fragments_aligned, -n_fragments_aligned_single, -n_fragments_aligned_multi, -notes, -DOI, -biosample)
+
+head(lcounts)
+```
+
+
+```{r}
+rpk_counts <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = rpk) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+rpk_counts[1:5, 1:5]
+
+counts2 <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+counts2[1:5, 1:5]
+```
+
+```{r}
+samples <- setNames(meta[["sample"]], meta[["sra"]])[colnames(rpk_counts)]
+rpk_counts_norm <- DGEList(rpk_counts, group = samples,  remove.zeros = TRUE)
+rpk_counts_norm <- normLibSizes(rpk_counts_norm, method = "TMM")
+getmm <- cpm(rpk_counts_norm) # https://doi.org/10.1186/s12859-018-2246-7
+
+
+counts_norm <- DGEList(counts2, group = samples,  remove.zeros = TRUE)
+counts_norm <- normLibSizes(counts_norm, method = "TMM")
+ctf <- counts2 / counts_norm$samples$norm.factors # https://doi.org/10.1186/s13059-021-02568-9
+```
+
+```{r}
+library(vsn)
+
+asinh <- function(mat) {
+  return(log(mat + sqrt((mat ^ 2) + 1)))
+}
+
+meanSdPlot(log(getmm + 1))
+meanSdPlot(log2(getmm + 0.5))
+meanSdPlot(asinh(getmm))
+```
+
+```{r}
+meanSdPlot(log(ctf + 1))
+meanSdPlot(log2(ctf + 0.5))
+meanSdPlot(asinh(ctf))
+```
+
+Honestly, the CTF transformation doesn't seem to be giving me anything useful, but we'll see what the PCAs look like.
+The asinh does actually seem pretty similar to the `log2(x + 0.5)` plot which was used in the GeTMM paper.
+
+
+```{r}
+if ("getmm" %in% colnames(lcounts)) {
+  lcounts <- lcounts %>% select(-getmm)
+}
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(log2(getmm + 0.5)) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "getmm"),
+  by = c("sra", "id")
+)
+
+if ("ctf" %in% colnames(lcounts)) {
+  lcounts <- lcounts %>% select(-ctf)
+}
+
+lcounts <- left_join(
+  lcounts,
+  as.data.frame(asinh(ctf)) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "ctf"),
+  by = c("sra", "id")
+)
+```
+
+
+```{r}
+ggplot(lcounts, aes(x = sample, y = log2(cpm + 0.5), colour = bioproject)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_blank())
+```
+
+```{r}
+ggplot(lcounts, aes(x = sample, y = getmm, colour = bioproject)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_blank())
+```
+
+```{r}
+ggplot(lcounts, aes(x = sample, y = ctf, colour = bioproject)) +
+  geom_boxplot() +
+  theme(axis.text.x = element_blank())
+```
+
+
+```{r, fig.width = 10, fig.height = 10}
+pca_raw <- princomp(scale(log2(ctf + 0.5), scale = FALSE, center = TRUE), fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+#ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+
+```{r, fig.width = 10, fig.height = 10}
+pca_raw <- princomp(scale(log2(getmm + 0.5), scale = FALSE, center = TRUE) , fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+#ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+```{r, fig.width = 10, fig.height = 10}
+pca_raw <- princomp(scale(asinh(ctf), scale = FALSE, center = TRUE), fix_sign = TRUE)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+
+pca <- as.data.frame(pca_raw$loadings[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta, pca, by = "sra")
+gg1 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg1 <- gg_shape(gg1, pca$host)
+
+gg2 <- pca %>%
+  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
+  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
+  full_join(., ., by=c("sra", "host", "bioproject")) %>%
+  unique() %>%
+  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
+  geom_point(size = 2, alpha = 0.6) +
+  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
+  theme(aspect.ratio = 1)
+
+gg2 <- gg_shape(gg2, pca$bioproject)
+library(cowplot)
+
+gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
+#ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
+gg
+```
+
+
+We'll have to see.
+I was planning to [SVA](https://academic.oup.com/nargab/article/2/3/lqaa078/5909519) to remove some of the batch effects, i've tried it and it doesn't ever seem to improve separation.
+Perhaps with a more considered experimental design it would be better, but for now it's not so good.
+
+
+Maybe i'll look at correlation matrices.
+
+```{r}
+# Utility function from https://jokergoo.github.io/2020/05/11/set-cell-width/height-in-the-heatmap/
+calc_ht_size = function(ht, unit = "inches") {
+    pdf(NULL)
+    ht = draw(ht)
+    w = ComplexHeatmap:::width(ht)
+    w = convertX(w, unit, valueOnly = TRUE)
+    h = ComplexHeatmap:::height(ht)
+    h = convertY(h, unit, valueOnly = TRUE)
+    dev.off()
+
+    c(w, h)
+}
+```
+
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = getmm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+#tmp <- tmp[order(apply(tmp, MARGIN = 1, FUN = var), decreasing = TRUE), ][1:1000, ]
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+rm(tmp_cor)
+rm(tmp)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = ctf) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+#tmp <- tmp[order(apply(tmp, MARGIN = 1, FUN = var), decreasing = TRUE), ][1:1000, ]
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = TRUE,
+  cluster_columns = TRUE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+
+rm(tmp_cor)
+rm(tmp)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = getmm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+tmp <- tmp[order(apply(tmp, MARGIN = 1, FUN = var), decreasing = TRUE), ]
+
+heatmap(cor(t(tmp[1:1000, ])))
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+Well the clusters in here certainly make more sense than from the raw data.
+I've looked at the data, and i don't think a log transformation is necessary.
+
+And here's the one from the dispersion normalised counts (i.e. DESeq but no ComBat).
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$bioproject, meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+rm(tmp_cor)
+rm(tmp)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+```{r, fig.width=12.409344, fig.height=8.906201}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count_tmm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$bioproject, meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+tmp_cor <- cor(tmp)
+#tmp_dist <- as.dist(1 - tmp_cor)
+#hcl <- hclust(tmp_dist, method = "average")
+
+#srrs <- colnames(tmp)[hcl$order]
+ha <- HeatmapAnnotation(
+  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
+  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
+)
+
+ht <- Heatmap(
+  tmp_cor,
+  name = "samples",
+  cluster_rows = FALSE,
+  cluster_columns = FALSE,
+  show_column_dend = FALSE,
+  show_column_names = FALSE,
+  show_row_names = FALSE,
+  top_annotation = ha,
+  height=nrow(tmp_cor) * unit(0.5, "mm"),
+  width=ncol(tmp_cor) * unit(0.5, "mm")
+)
+rm(tmp_cor)
+rm(tmp)
+
+htsize <- calc_ht_size(ht)
+htsize
+
+pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
+ht
+dev.off()
+
+draw(ht)
+```
+
+
+
+These look almost identical.
+I think that because the extra amount of variance explained is relatively low, and the results look fairly similar, i won't continue with the ComBat normalised counts.
+There's a risk that removing the bioproject effect might remove some information about treatments (esp because I wasn't able to provide info about treatments).
+The benefits don't seem to outweigh the risks.
+
+I'd like to see what we can do with gene level correlation.
+Do the gene expression values look ok?
+
+```{r}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+# There are two genes with no counts in any samples.
+# We need to exclude them for the correlation to work.
+# Causes error about stddev == 0.
+tmp_cor_disp <- cor(t(tmp[(rowSums(tmp) > 0), ]))
+
+quantile(tmp_cor_disp)
+rm(tmp_cor_disp)
+rm(tmp)
+```
+
+
+
+```{r}
+tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count_tmm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
+tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
+
+# There are two genes with no counts in any samples.
+# We need to exclude them for the correlation to work.
+# Causes error about stddev == 0.
+tmp_cor_disp <- cor(t(tmp[(rowSums(tmp) > 0), ]))
+
+quantile(tmp_cor_disp)
+rm(tmp_cor_disp)
+```
+
+Yeah that seems like a reasonable range of values.
+I think probably the number of genes with mid correlation (~0.5-0.8) is caused by genes with relatively low variation across treatments.
+I suspect that once we remove those genes we'll see cleaner differences.
+
+```{r}
+pca_raw <- prcomp(t(tmp), retx = TRUE)
+
+rm(tmp)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(prop_var)
+ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+```
+
+```{r, fig.width = 4.75, fig.height = 3.5}
+pca <- as.data.frame(pca_raw$rotation[, 1:10])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("id")
+
+gg <- ggplot(pca, aes(x=PC01, y=PC02)) +
+  geom_point(alpha = 0.7, size = 3)
+
+print(gg)
+
+gg <- ggplot(pca, aes(x=PC03, y=PC04)) +
+  geom_point(alpha = 0.7, size = 3)
+
+gg
+```
+
+I guess the values look fine.
+It's a bit hard to say but there aren't like crazy clusters or massive outliers.
+
+We'll continue with the dispersion corrected counts.
+I just want to check though whether there are mean differences left in the data.
+
+```{r, fig.height=20, fig.width = 20}
+ggplot(lcounts, aes(x = sra, y = disp_norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
+```
+
+```{r, fig.height=20, fig.width = 20}
+ggplot(lcounts, aes(x = sra, y = disp_norm_count_tmm, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
+```
+
+
+I do see differences in mean and scale between bioprojects.
+They're pretty similar in terms of the range, but it might be a problem later if we do anything other than correlation clustering.
+How are the ComBat counts?
+
+```{r, fig.height=20, fig.width = 20}
+ggplot(lcounts, aes(x = sra, y = norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
+```
+
+I seems like the main contribution here is that some of the crazy outliers in PRJNA670487 are squished.
+Otherwise the counts have pretty similar ranges.
+
+I think _maybe_ i'm coming back around to ComBat just for the sake of shrinking the outliers?
+
+I'm just going to save them both and we can decide later :)
+
+
+```{r}
+lcounts %>%
+  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = disp_norm_count) %>%
+  readr::write_tsv("output/feature_counts_deseq2_normed.tsv", na = "-")
+```
+
+```{r}
+lcounts %>%
+  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = norm_count) %>%
+  readr::write_tsv("output/feature_counts_combat_normed.tsv", na = "-")
+```

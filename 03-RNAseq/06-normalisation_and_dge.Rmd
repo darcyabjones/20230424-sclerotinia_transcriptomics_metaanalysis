@@ -17,7 +17,7 @@ The first think is to load the data and see what we're dealing with.
 
 ```{r}
 library(tidyverse)
-library(ruv)
+# library(ruv)
 library(DESeq2) # bioconductor
 library(vsn) # bioconductor
 library(edgeR) # bioconductor
@@ -25,11 +25,16 @@ library(ggplot2)
 library(ggrepel)
 library(ggExtra)
 library(scales)
-library(HTSFilter)
-library(sva)
+library(HTSFilter) # bioconductor
+library(sva) # bioconductor
+library("UpSetR")
 
 library(ComplexHeatmap) # bioconductor
 ```
+
+BiocManager::install("sva")
+BiocManager::install("HTSFilter")
+BiocManager::install("ComplexHeatmap")
 
 
 ```{r}
@@ -82,6 +87,57 @@ meta <- readr::read_delim("input/sra_rnaseq2.tsv", delim = "\t", na = "-") %>%
 head(meta)
 ```
 
+```{r}
+virus_mapper <- c("DT8SsHADV" = "SsHADV", "DT8" = "VF", "Z113OXSsNSRV1" = "SsNSRV1", "Z11OXSsNSRV1" = "SsNSRV1", "AH98" = "SsNSRV1", "1980" = "VF", "DK3SlaGemV1" = "SlaGemV1", "DK3" = "VF")
+
+meta <- meta %>% mutate(
+  infection_stage = case_when(
+    (host_tidyname == "Psat") & (hpi < 24) ~ "E",
+    (host_tidyname == "Psat") & (24 <= hpi) & (hpi < 48) ~ "M",
+    (host_tidyname == "Psat") & (48 <= hpi) ~ "L",
+    (host_tidyname == "Gmax") & (hpi < 48) ~ "E",
+    (host_tidyname == "Gmax") & (48 <= hpi) & (hpi < 96) ~ "M",
+    (host_tidyname == "Gmax") & (96 <= hpi) ~ "L",
+    (host_tidyname == "Bnap") & (hpi < 12) ~ "E",
+    (host_tidyname == "Bnap") & (12 <= hpi) & (hpi < 48) ~ "M",
+    (host_tidyname == "Bnap") & (48 <= hpi) ~ "L",
+    (host_tidyname == "Cari") & (hpi < 24) ~ "E",
+    (host_tidyname == "Cari") & (24 <= hpi) & (hpi < 24) ~ "M",
+    (host_tidyname == "Cari") & (72 <= hpi) ~ "L",
+    TRUE ~ NA
+  ),
+  resistance = case_when(
+    (host_tidyname == "Psat") & (host_accession == "Lifter") ~ "Susc",
+    (host_tidyname == "Psat") & (host_accession == "PI240515") ~ "Res",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "9144") ~ "Susc",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "91145") ~ "Res",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "ACColibri") ~ "Susc",
+    (host_tidyname == "Gmax") & (host_accession_tidyname == "ACColibriOA") ~ "Res",
+    (host_tidyname == "Cari") & (host_accession_tidyname == "Kyabra") ~ "Susc",
+    (host_tidyname == "Cari") & (host_accession_tidyname == "HatTrick") ~ "Res",
+    (host_tidyname == "Bnap") & (host_accession_tidyname == "NingRS1") ~ "Res",
+    (host_tidyname == "Bnap") & (host_accession_tidyname == "1703") ~ "Res",
+    (host_tidyname == "Lsat") & (host_accession_tidyname %in% c("RedGranoble", "58", "Pallone", "OakLeaf", "KaiserSelbstschluss", "Kahu", "CobhamGreen", "BloodyWarrior", "Ambassador", "Adriatica2", "68", "Simpson", "Saladin", "RomainDeBenicardo")) ~ "Susc",
+    (host_tidyname == "Lsat") & (host_accession_tidyname %in% c("Prazan", "Iceberg", "BataviaTezier", "Aspen")) ~ "Res",
+    TRUE ~ NA  
+  ),
+  virus = ifelse(accession_tidyname %in% names(virus_mapper), virus_mapper[accession_tidyname], NA)
+) %>% mutate(
+  infection_stage = factor(ifelse((!is.na(resistance)) & (!is.na(infection_stage)) & (resistance == "Res"), paste0(infection_stage, "Res"), infection_stage))
+) %>% mutate(
+  sample = factor(sample),
+  host_tidyname = factor(host_tidyname),
+  infection_stage = factor(infection_stage),
+  resistance = factor(resistance),
+  virus = factor(virus),
+  hpi = factor(hpi),
+  ipvsivtp = factor(ifelse(host_tidyname == "IV", "IV", ifelse(is.na(infection_stage), NA, paste0(host_tidyname, "_", infection_stage))))
+)
+
+head(meta %>% select(sra, bioproject, host_tidyname, sample, infection_stage, resistance, virus, ipvsivtp))
+```
+
+
 OK. The data is in, let's look at the counts.
 
 ```{r, fig.height=8, fig.width=14}
@@ -125,7 +181,6 @@ lcounts <- dplyr::inner_join(
 head(lcounts)
 ```
 
-
 Let's have a look at some PCA plots.
 
 ```{r}
@@ -134,6 +189,7 @@ tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_
   as.matrix()
 
 pca_raw <- princomp(tmp, fix_sign = TRUE)
+rm(tmp)
 
 prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev[1:10])) * 100) %>%
   data.frame(variance_explained = .) %>%
@@ -238,6 +294,9 @@ ht <- Heatmap(
   width=ncol(tmp_cor) * unit(0.5, "mm")
 )
 
+rm(tmp_cor)
+rm(tmp)
+
 htsize <- calc_ht_size(ht)
 htsize
 
@@ -284,6 +343,9 @@ ht <- Heatmap(
   width=ncol(tmp_cor) * unit(0.5, "mm")
 )
 
+rm(tmp_cor)
+rm(tmp)
+
 htsize <- calc_ht_size(ht)
 htsize
 
@@ -329,6 +391,9 @@ ht <- Heatmap(
   height=nrow(tmp_cor) * unit(0.5, "mm"),
   width=ncol(tmp_cor) * unit(0.5, "mm")
 )
+
+rm(tmp_cor)
+rm(tmp)
 
 htsize <- calc_ht_size(ht)
 htsize
@@ -434,73 +499,244 @@ plot_volcano <- function(df, title=NA, nlabels = 5, padj_threshold = 0.05) {
 }
 
 
-process_contrast_mat <- function(bpr, contrasts, this_meta) {
+process_contrast_mat <- function(contrasts, this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
   colnames(contrasts) <- c("sample1", "sample2", "contrast_group")
   contrasts <- as.data.frame(contrasts)
   contrasts["contrast"] <- apply(contrasts, MARGIN = 1, FUN = function(x) {paste0(x["sample1"], "_vs_", x["sample2"])})
   contrasts["bioproject"] <- bpr
   contrasts <- dplyr::left_join(
     contrasts,
-    this_meta %>% select(sample1 = sample, host1 = host_tidyname, hpi1 = hpi) %>% unique(),
+    this_meta %>% select(sample1 = sample, host1 = host_tidyname, infection_stage1 = infection_stage) %>% unique(),
     by="sample1"
   )
   
   contrasts <- dplyr::left_join(
     contrasts,
-    this_meta %>% select(sample2 = sample, host2 = host_tidyname, hpi2 = hpi) %>% unique(),
+    this_meta %>% select(sample2 = sample, host2 = host_tidyname, infection_stage2 = infection_stage) %>% unique(),
     by="sample2"
   )
   
-  contrasts <- contrasts[, c('contrast_group', 'bioproject', 'contrast', 'sample1', 'sample2', 'host1', 'hpi1', 'host2', 'hpi2')]
+  contrasts <- contrasts[, c('contrast_group', 'bioproject', 'contrast', 'sample1', 'sample2', 'host1', 'host2', 'infection_stage1', 'infection_stage2')] %>%
+    mutate(sample1 = as.factor(sample1), sample2 = as.factor(sample2), host1 = as.factor(host1), host2 = as.factor(host2), infection_stage1 = as.factor(infection_stage1), infection_stage2 = as.factor(infection_stage2))
   return(contrasts)
 }
 
 
-run_deg_tests <- function(lcounts, contrasts, bpr, norm_only = FALSE, exclude = NULL) {
-  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+process_host_contrast_mat <- function(this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
+  names <- unique(as.character(this_meta[["host_tidyname"]]))
+  mat <- expand.grid(names, names) %>%
+    filter(Var1 != "IV") %>%
+    mutate(
+      bioproject = bpr,
+      contrast = paste0(bpr, "_", Var1, "vs", Var2),
+      contrast_group = ifelse(Var2 == "IV", "IPvsIV", paste0(Var1, "vs", Var2)),
+      infection_stage1 = as.factor(NA),
+      infection_stage2 = as.factor(NA),
+      resistance1 = as.factor(NA),
+      resistance2 = as.factor(NA),
+      virus1 = as.factor(NA),
+      virus2 = as.factor(NA)
+    ) %>%
+    rename(
+      Var1 = "host1",
+      Var2 = "host2"
+    ) %>%
+    filter(host1 != host2) %>%
+    select(contrast_group, bioproject, contrast, host1, host2, infection_stage1, infection_stage2, virus1, virus2, resistance1, resistance2)
+  return(mat)
+}
+
+
+process_ipvsivtp_contrast_mat <- function(this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
+  names <- unique(as.character(this_meta[["ipvsivtp"]]))
+
+  mat <- expand.grid(names, names) %>%
+    filter(Var1 != "IV", Var2 == "IV") %>%
+    mutate(
+      bioproject = bpr,
+      contrast_group = paste0("IPvsIV_", gsub("^[^_]+_", "", Var1, perl = TRUE)),
+      contrast = paste0(bpr, "_", Var1, "vs", Var2),
+      infection_stage1 = as.factor(gsub("^[^_]+_", "", Var1, perl = TRUE)),
+      infection_stage2 = as.factor(NA),
+      resistance1 = as.factor(NA),
+      resistance2 = as.factor(NA),
+      virus1 = as.factor(NA),
+      virus2 = as.factor(NA)
+    ) %>%
+    rename(
+      Var1 = "host1",
+      Var2 = "host2"
+    ) %>%
+    filter(host1 != host2) %>%
+    select(contrast_group, bioproject, contrast, host1, host2, infection_stage1, infection_stage2, virus1, virus2, resistance1, resistance2)
+  return(mat)
+}
+
+
+process_timepoint_contrast_mat <- function(this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
+  names <- unique(as.character(this_meta[["host_tidyname"]]))
+  names <- names[names != "IV"]
+  infection_stage <- unique(as.character(this_meta[["infection_stage"]]))
+  infection_stage <- infection_stage[!is.na(infection_stage)]
+  
+  mat <- expand.grid(names, infection_stage, infection_stage) %>%
+    mutate(
+      bioproject = bpr,
+      contrast_group = paste0(Var2, "vs", Var3),
+      contrast = paste0(bpr, "_", Var1, "_", Var2, "vs", Var3),
+      host1 = Var1,
+      host2 = Var1,
+      resistance1 = as.factor(NA),
+      resistance2 = as.factor(NA),
+      virus1 = as.factor(NA),
+      virus2 = as.factor(NA)
+    ) %>%
+    rename(
+      Var2 = "infection_stage1",
+      Var3 = "infection_stage2"
+    ) %>%
+    filter(
+      contrast_group %in% c("MvsE", "LvsE", "LvsM", "MResvsERes", "LResvsERes", "LResvsMRes")
+    ) %>%
+    select(contrast_group, bioproject, contrast, host1, host2, infection_stage1, infection_stage2, virus1, virus2, resistance1, resistance2)
+  return(mat)
+}
+
+process_resistance_contrast_mat <- function(this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
+  names <- unique(as.character(this_meta[["host_tidyname"]]))
+  names <- names[names != "IV"]
+  resistance <- unique(as.character(this_meta[["resistance"]]))
+  resistance <- resistance[!is.na(resistance)]
+  
+  mat <- expand.grid(names, resistance, resistance) %>%
+    filter(
+      Var2 == "Susc",
+      Var3 == "Res"
+    ) %>%
+    mutate(
+      bioproject = bpr,
+      contrast_group = paste0(Var2, "vs", Var3),
+      contrast = paste0(bpr, "_", Var1, "_", Var2, "vs", Var3),
+      host1 = Var1,
+      host2 = Var1,
+      infection_stage1 = as.factor(NA),
+      infection_stage2 = as.factor(NA),
+      resistance1 = as.factor("Susc"),
+      resistance2 = as.factor("Res"),
+      virus1 = as.factor(NA),
+      virus2 = as.factor(NA)
+    ) %>%
+    select(contrast_group, bioproject, contrast, host1, host2, infection_stage1, infection_stage2, virus1, virus2, resistance1, resistance2)
+  return(mat)
+}
+
+process_virus_contrast_mat <- function(this_meta) {
+  bpr = unique(this_meta[["bioproject"]])
+  stopifnot(all(this_meta[["bioproject"]] == bpr))
+
+  names <- unique(as.character(this_meta[["host_tidyname"]]))
+  virus <- unique(as.character(this_meta[["virus"]]))
+  virus <- virus[!is.na(virus)]
+
+  mat <- expand.grid(names, virus, virus) %>%
+    filter(
+      Var2 != "VF",
+      Var3 == "VF"
+    ) %>%
+    mutate(
+      bioproject = bpr,
+      contrast_group = paste0(Var2, "vs", Var3),
+      contrast = paste0(bpr, "_", Var1, "_", Var2, "vs", Var3),
+      host1 = Var1,
+      host2 = Var1,
+      infection_stage1 = as.factor(NA),
+      infection_stage2 = as.factor(NA),
+      resistance1 = as.factor(NA),
+      resistance2 = as.factor(NA),
+      virus1 = as.factor(Var2),
+      virus2 = as.factor(Var3)
+    ) %>%
+    select(contrast_group, bioproject, contrast, host1, host2, infection_stage1, infection_stage2, virus1, virus2, resistance1, resistance2)
+  return(mat)
+}
+
+
+run_deg_tests <- function(lcounts, meta, contrasts, design, kind) {
+  bpr = unique(meta[["bioproject"]])
+  stopifnot(all(meta[["bioproject"]] == bpr))
+  stopifnot(kind %in% c("host", "infection_stage", "resistance", "virus", "pairwise", "ipvsivtp"))
+
+  this_counts <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
     column_to_rownames("id") %>%
     as.matrix()
+
+  this_meta <- meta %>% column_to_rownames("sra") %>% .[colnames(this_counts), ]
   
-  all(rownames(this_meta) == colnames(this_counts))
-  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
+  stopifnot(all(rownames(this_meta) == colnames(this_counts)))
   
   dds <- DESeqDataSetFromMatrix(
     countData = this_counts,
-    colData = this_meta_,
-    design = ~ sample
+    colData = this_meta,
+    design = design
   )
-  
-  ncounts <- assay(rlog(dds, blind = FALSE))
-  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
-  
-  if (norm_only) {
-    return(list("norm_counts" = ncounts))
-  }
-  
-  if (!is.null(exclude)) {
-    this_counts <- lcounts %>% filter(bioproject == bpr) %>% filter(!sra %in% exclude) %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
-      column_to_rownames("id") %>%
-      as.matrix()
-    
-    all(rownames(this_meta) == colnames(this_counts))
-    this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
-    
-    dds <- DESeqDataSetFromMatrix(
-      countData = this_counts,
-      colData = this_meta_,
-      design = ~ sample
-    )
-  }
-  
+
+  intgroup <- as.character(design[[2]])
+  intgroup <- intgroup[!intgroup %in% c("+", "-", ":", "*")]
+  print(plotPCA(rlog(dds, blind = FALSE), intgroup = intgroup))
+
   dds_results <- DESeq(dds, test = "Wald")
   filter <- HTSFilter(dds_results, plot = TRUE, s.len=100)$filteredData
   
   # Normally i prefer to run lfcThreshold=1, but the meta analysis methods require a uniform p-value
   # distribution, and thresholded tests yield a big peak around pvalue=1.
+  
+  if (kind == "host") {
+    meta_col <- "host_tidyname"
+    contrast_col1 <- "host1"
+    contrast_col2 <- "host2"
+  } else if (kind == "ipvsivtp") {
+    meta_col <- "ipvsivtp"
+    contrast_col1 <- "host1"
+    contrast_col2 <- "host2"
+  } else if (kind == "infection_stage") {
+    meta_col <- "infection_stage"
+    contrast_col1 <- "infection_stage1"
+    contrast_col2 <- "infection_stage2"
+  } else if (kind == "resistance") {
+    meta_col <- "resistance"
+    contrast_col1 <- "resistance1"
+    contrast_col2 <- "resistance2"
+  } else if (kind == "virus") {
+    meta_col <- "virus"
+    contrast_col1 <- "virus1"
+    contrast_col2 <- "virus2"
+  } else if (kind == "pairwise") {
+    meta_col <- "sample"
+    contrast_col1 <- "sample1"
+    contrast_col2 <- "sample2"
+  } else {
+    stop("This shouldn't happen")
+  }
+  
   tests <- apply(
     contrasts,
     MARGIN = 1,
-    FUN = function(x) {results(dds_results, contrast = c("sample", x["sample1"], x["sample2"]), alpha = 0.01, lfcThreshold = 0, independentFiltering=FALSE)}
+    FUN = function(x) {results(filter, contrast = c(meta_col, x[contrast_col1], x[contrast_col2]), alpha = 0.01, lfcThreshold = 0, independentFiltering=FALSE)}
   )
   names(tests) <- contrasts$contrast
   
@@ -518,58 +754,54 @@ run_deg_tests <- function(lcounts, contrasts, bpr, norm_only = FALSE, exclude = 
     t2 <- as.data.frame(t) %>% summarise(
       up = sum((log2FoldChange > 0) & (padj < 0.05), na.rm = TRUE),
       down = sum((log2FoldChange < 0) & (padj < 0.05), na.rm = TRUE),
-      zerocounts = sum(baseMean == 0, na.rm = TRUE),
       n = n()
     )
     return(t2)
   }
   
-  # After HTSfilter these stats are no longer relevant
-  #lowcount_threshold = t@metadata$filterThreshold,
-  #lowcounts = sum(baseMean < t@metadata$filterThreshold, na.rm = TRUE),
-  
   print(do.call(rbind, lapply(tests, mapper)))
-
-  return(list("norm_counts" = ncounts, "tests" = tests))
-}
-
-run_count_norm <- function(lcounts, bpr) {
-  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
-    column_to_rownames("id") %>%
-    as.matrix()
   
-  all(rownames(this_meta) == colnames(this_counts))
-  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
-  
-  dds <- DESeqDataSetFromMatrix(
-    countData = this_counts,
-    colData = this_meta_,
-    design = ~ 1
+  tests <- do.call(
+    rbind,
+    lapply(
+      names(tests),
+      FUN = function(n) {as.data.frame(tests[[n]]) %>% rownames_to_column("id") %>% mutate(contrast = n)}
+    )
   )
+
+  tests <- right_join(contrasts, tests, by = "contrast") %>%
+    rename(baseMean = "basemean", log2FoldChange = "lfc", lfcSE = "lfc_se")
   
-  ncounts <- assay(rlog(dds, blind = TRUE))
-  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
-  
-  return(list("norm_counts" = ncounts))
+  if (kind == "ipvsivtp") {
+    tests <- tests %>%
+      mutate(host1 = as.factor(gsub("_.+$", "", host1, perl = TRUE)))
+  }
+  return(tests)
 }
+
 ```
 
+
+
+## Pairwise tests
+
+First off i'm going to run all of the pairwise tests of interest.
+One of the main things we're after is invitro vs inplanta comparisons.
+However, we don't have all timepoints in all experiments and the invitro samples do not usually have a time dimension, which makes marginal estimates difficult.
+We'll look at the intersections between pairwise samples to decide what's good.
+
+Honestly there are so many tests to run that it's hard to spend the time to describe the whole process in detail.
+So i'm just going to burn through some code.
 
 
 ```{r}
-all_contrasts <- list()
-norm_counts <- list()
-deg_results <- list()
+pairwise_results <- list()
 ```
-
-
-
-### PRJNA261444
 
 ```{r}
 bpr <- "PRJNA261444"
 this_meta <- meta %>% filter(bioproject == bpr)
-# this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_12hpi", "PRJNA261444_SsclScl0205_periphery_IVPDA_stem_12hpi", "IPvsIV",
@@ -589,17 +821,14 @@ contrasts <- matrix(c(
   "PRJNA261444_SsclScl0205_lesion_PsatLifter_stem_48hpi", "PRJNA261444_SsclScl0205_lesion_PsatPI240515_stem_48hpi", "SuscvsRes"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA327437"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_1hpi", "PRJNA327437_Sscl1980_colony_IVMMGlu", "IPvsIV",
@@ -621,18 +850,14 @@ contrasts <- matrix(c(
   "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_48hpi", "PRJNA327437_Sscl1980_lesion_BnapDH12705_leaf_24hpi", "LvsM"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
-
 
 ```{r}
 bpr <- "PRJNA341340"
 this_meta <- meta %>% filter(bioproject == bpr)
-# this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA341340_Sscl1980_lesion_Slys", "PRJNA341340_Sscl1980_ball_IVPDB", "IPvsIV",
@@ -647,35 +872,30 @@ contrasts <- matrix(c(
   "PRJNA341340_Sscl1980_sclerotia_IV", "PRJNA341340_Sscl1980_ball_IVPDB", "Sclerotial"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
+
 
 ```{r}
 bpr <- "PRJNA418121"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA418121_Sscl1980_periphery_AthaCol0_leaf_50hpi", "PRJNA418121_Sscl1980_periphery_SlysHeinz_leaf_50hpi", "AthavsSlys",
   "PRJNA418121_Sscl1980_periphery_SlysHeinz_leaf_50hpi", "PRJNA418121_Sscl1980_periphery_AthaCol0_leaf_50hpi", "SlysvsAtha"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA471709"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_24hpi", "MvsERes",
@@ -689,18 +909,15 @@ contrasts <- matrix(c(
   "PRJNA471709_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA471709_Sscl1980_lesion_Gmax91145_stem_96hpi", "SuscvsRes"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA477716"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_ball_IVPDB_96hpi", "IPvsIV",
@@ -709,18 +926,15 @@ contrasts <- matrix(c(
   "PRJNA477716_Sscl1980_center_AthaCol0_leaf_48hpi", "PRJNA477716_Sscl1980_center_IVPDA_48hpi", "IPvsIV"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA501892"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
@@ -729,12 +943,6 @@ contrasts <- matrix(c(
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_colony_IVPDA", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "IPvsIV",
-  "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "IPvsIV",
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_24hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_24hpi", "SuscvsResE",
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_48hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "SuscvsRes",
   "PRJNA501892_Sscl1980_lesion_Gmax9144_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "SuscvsRes",
@@ -746,17 +954,14 @@ contrasts <- matrix(c(
   "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_96hpi", "PRJNA501892_Sscl1980_lesion_Gmax91145_stem_48hpi", "LvsMRes"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA516496"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA516496_SsclCU824_lesion_LangTanjil_stem_72hpi", "PRJNA516496_SsclCU824_ball_IVPDB", "IPvsIV",
@@ -765,18 +970,15 @@ contrasts <- matrix(c(
   "PRJNA516496_SsclCU824_lesion_BnapCobbler_stem_72hpi", "PRJNA516496_SsclCU824_lesion_LangTanjil_stem_72hpi", "BnapvsLang"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA574280"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA574280_Sscl1980_periphery_HannXRQ_leaf_24hpi", "PRJNA574280_Sscl1980_periphery_PvulG19833_leaf_50hpi", "HannvsPvul",
@@ -793,18 +995,15 @@ contrasts <- matrix(c(
   "PRJNA574280_Sscl1980_periphery_Bvulvul_leaf_72hpi", "PRJNA574280_Sscl1980_periphery_Rcom_leaf_50hpi", "BvulvulvsRcom"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA577619"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA577619_SsclDT8SsHADV_surface_hyphae_Bnap_12hpi", "PRJNA577619_SsclDT8_surface_hyphae_Bnap_12hpi", "SsHADVvsVF",
@@ -812,17 +1011,15 @@ contrasts <- matrix(c(
   "PRJNA577619_SsclDT8SsHADV_surface_hyphae_Bnap_18hpi", "PRJNA577619_SsclDT8_surface_hyphae_Bnap_18hpi", "SsHADVvsVF"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
+
 
 ```{r}
 bpr <- "PRJNA593737"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA593737_SsclZ113OXSsNSRV1_colony_IVPDA", "PRJNA593737_Sscl1980_colony_IVPDA", "SsNRSVvsVF",
@@ -830,61 +1027,43 @@ contrasts <- matrix(c(
   "PRJNA593737_SsclAH98_colony_IVPDA", "PRJNA593737_Sscl1980_colony_IVPDA", "SsNRSVSsHVvsVF"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
-```
-
-```{r}
-bpr <- "PRJNA601001"
-this_meta <- meta %>% filter(bioproject == bpr)
-# Just the counts please, no replicates
-
-results <- run_count_norm(lcounts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA603456"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA603456_SsclMBGSs2_colony_IVPDAindol3carbinol", "PRJNA603456_SsclMBGSs2_colony_IVPDA", "none",
   "PRJNA603456_SsclMBGSs2_colony_IVPDAallylisothiocyanate", "PRJNA603456_SsclMBGSs2_colony_IVPDA", "none"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA607858"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA607858_Sscl_lesion_AthaCol0Ago21_leaf_8hpi", "PRJNA607858_Sscl_lesion_AthaCol0_leaf_8hpi", "none"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA641217"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA641217_SsclDT8_lesion_Bnap_hypocotyl", "PRJNA641217_SsclDT8_colony_IVPDA", "IPvsIV",
@@ -893,62 +1072,42 @@ contrasts <- matrix(c(
   "PRJNA641217_SsclDT8SsHADV_lesion_Bnap_hypocotyl", "PRJNA641217_SsclDT8_lesion_Bnap_hypocotyl", "SsHADVvsVF"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA641462"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA641462_SsclDT8SsHADV_lesion_BnapHuashaung4_hypocotyl", "PRJNA641462_SsclDT8_lesion_BnapHuashaung4_hypocotyl", "SsHADVvsVF"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA643804"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   "PRJNA643804_SsclDK3SlaGemV1_cellophane_colony_IVPDACellophane", "PRJNA643804_SsclDK3_cellophane_colony_IVPDACellophane", "SlaGemV1vsVF"
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
-
-```{r}
-bpr <- "PRJNA647983"
-this_meta <- meta %>% filter(bioproject == bpr)
-this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
-# Network only
-
-results <- run_count_norm(lcounts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-```
-
 
 ```{r}
 bpr <- "PRJNA670487"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA670487_Sscl1980_periphery_AthaCol0_leaf_50hpi', 'PRJNA670487_Sscl1980_ball_IVPDB', 'IPvsIV',
@@ -1049,18 +1208,15 @@ contrasts <- matrix(c(
   'PRJNA670487_Sscl1980_center_Rcom_leaf_50hpi', 'PRJNA670487_Sscl1980_center_Pvul_leaf_50hpi', 'RcomvsPvul'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA687280"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA687280_SsclCU820_lesion_CariHatTrick_stem_6hpi', 'PRJNA687280_SsclCU820_ball_IVPDB', 'IPvsIV',
@@ -1095,52 +1251,43 @@ contrasts <- matrix(c(
   'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_72hpi', 'PRJNA687280_SsclCU820_lesion_CariKyabra_stem_48hpi', 'LvsM'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA695466"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA695466_SsclDT8SsHADV_colony_IVPDA', 'PRJNA695466_SsclDT8_colony_IVPDA', 'SsHADVvsVF'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA706136"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA706136_Sscl_lesion_Bole_petiole_8hpi', 'PRJNA706136_Sscl_lesion_Bvil_petiole_8hpi', 'BolevsBvil',
   'PRJNA706136_Sscl_lesion_Bvil_petiole_8hpi', 'PRJNA706136_Sscl_lesion_Bole_petiole_8hpi', 'BvilvsBole'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA735329"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_24hpi', 'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_6hpi', 'MvsERes',
@@ -1148,46 +1295,30 @@ contrasts <- matrix(c(
   'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_48hpi', 'PRJNA735329_Sscl1980_lesion_BnapNingRS1_leaf_24hpi', 'LvsMRes'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
-```{r}
-bpr <- "PRJNA744751"
-this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
-
-# Just the counts please
-results <- run_count_norm(lcounts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-```
 
 ```{r}
 bpr <- "PRJNA766564"
-this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
-
-exclude <- c("SRR16082437")
+this_meta <- meta %>% filter(bioproject == bpr, sra != "SRR16082437")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
    'PRJNA766564_Sscl_lesion_BnapWestar_stem_168hpi', 'PRJNA766564_Sscl_lesion_BnapWestar_stem_24hpi', 'LvsE',
    'PRJNA766564_Sscl_lesion_BnapWestar_stem_168hpi', 'PRJNA766564_Sscl_lesion_Bnap1703_stem_168hpi', 'SuscvsRes'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta)
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr, exclude=exclude)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
+
 
 ```{r}
 bpr <- "PRJNA777355"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_2hpi', 'PRJNA777355_Sscl1980_cellophane_colony_IVPDACellophane', 'IPvsIV',
@@ -1203,17 +1334,14 @@ contrasts <- matrix(c(
   'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_36hpi', 'PRJNA777355_Sscl1980_lesion_BnapWestar_leaf_6hpi', 'MvsE'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA789389"
-this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_meta <- meta %>% filter(bioproject == bpr, sra != "SRR17267260")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA789389_SsclNB5_lesion_GmaxACColibriOA_leaf_4hpi', 'PRJNA789389_SsclNB5_ball_IVCYM', 'IPvsIV',
@@ -1222,17 +1350,15 @@ contrasts <- matrix(c(
   'PRJNA789389_SsclNB5_lesion_GmaxACColibri_leaf_8hpi', 'PRJNA789389_SsclNB5_lesion_GmaxACColibriOA_leaf_8hpi', 'SuscvsResE'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr, exclude = "SRR17267260")
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
+
 
 ```{r, fig.height=10, fig.width=10}
 bpr <- "PRJNA804213"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 # These don't have phenotypes that I can find, so no contrasts
 # PRJNA804213_SsclP7_lesion_LsatPI251246_leaf_42hpi
@@ -1298,17 +1424,14 @@ contrasts <- matrix(c(
   'PRJNA804213_SsclP7_lesion_LsatRomainDeBenicardo_leaf_42hpi', 'PRJNA804213_SsclP7_lesion_LsatAspen_leaf_42hpi', 'SuscvsRes'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 ```{r}
 bpr <- "PRJNA830457"
-this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_meta <- meta %>% filter(bioproject == bpr, host_accession != "resynthesized")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 # I decided to exclude the resynthesized sample in case it isn't a good representative of Bnapus
 # PRJNA830457_Sscl_periphery_BnapResynthesized_leaf_24hpi
@@ -1322,29 +1445,769 @@ contrasts <- matrix(c(
   'PRJNA830457_Sscl_periphery_BoleTO1000_leaf_24hpi', 'PRJNA830457_Sscl_periphery_BrapIMB218_leaf_24hpi', 'BolevsBrap'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
 
 
 ```{r}
 bpr <- "PRJNA874732"
 this_meta <- meta %>% filter(bioproject == bpr)
-#this_meta %>% select(included, sample, organism, accession, host, host_accession, tissue, hpi, plant_tissue, sample_material, notes, host_, organism_)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
 
 contrasts <- matrix(c(
   'PRJNA874732_Sscl1980dSsAOX_colony_IVMMGluSSE', 'PRJNA874732_Sscl1980_colony_IVMMGluSSE', 'none'
 ), ncol=3, byrow = TRUE)
 
-contrasts <- process_contrast_mat(bpr, contrasts, this_meta) 
-all_contrasts[[bpr]] <- contrasts
-results <- run_deg_tests(lcounts, contrasts, bpr)
-norm_counts[[bpr]] <- results[["norm_counts"]]
-deg_results <- c(deg_results, results[["tests"]])
+contrasts <- process_contrast_mat(contrasts, this_meta)
+pairwise_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ sample, kind = "pairwise")
 ```
+
+
+```{r}
+pairwise_results_df <- do.call(rbind, pairwise_results)
+rownames(pairwise_results_df) <- NULL
+
+readr::write_tsv(pairwise_results_df, "output/dge_tests_pairwise.tsv", na = "-")
+head(pairwise_results_df)
+```
+
+```{r, fig.width = 20, fig.height = 7}
+tmp <- pairwise_results_df %>%
+  filter(contrast_group == "IPvsIV", host1 == "Psat", padj < 0.01) %>%
+  select(contrast, id) %>%
+  split(., .[["contrast"]]) %>%
+  lapply(FUN = function(df) {df[["id"]]})
+
+upset(
+  fromList(tmp),
+  order.by = "freq",
+  nsets = length(tmp),
+  nintersects = 100
+)
+rm(tmp)
+```
+
+```{r, fig.width = 20, fig.height = 7}
+tmp <- pairwise_results_df %>%
+  filter(contrast_group %in% c("MvsE", "LvsE", "LvsM", "MvsERes", "LvsERes", "LvsMres"), host1 == "Psat", padj < 0.01) %>%
+  select(contrast, id) %>%
+  split(., .[["contrast"]]) %>%
+  lapply(FUN = function(df) {df[["id"]]})
+
+upset(
+  fromList(tmp),
+  order.by = "freq",
+  nsets = length(tmp),
+  nintersects = 100
+)
+rm(tmp)
+```
+
+
+```{r, fig.width = 20, fig.height = 7}
+tmp <- pairwise_results_df %>%
+  filter(contrast_group %in% c("MvsE", "LvsE", "LvsM", "MvsERes", "LvsERes", "LvsMres"), host1 == "Psat") %>%
+  mutate(dge = as.integer(padj < 0.01)) %>%
+  tidyr::pivot_wider(id_cols = "id", names_from = "contrast", values_from = "dge") %>%
+  column_to_rownames("id")
+
+tmp[is.na(tmp)] <- 0
+
+heatmap(t(as.matrix(tmp)), labCol = FALSE, scale = "none", distfun = function(x) {dist(x, method = "binary")})
+rm(tmp)
+```
+
+## Processing marginal sets
+
+For the meta analysis, we really only want one DGE test for each experiment and contrast type of interest.
+E.g. we would like to avoid having five ipvsiv contrasts, because the likely won't be independent of each other.
+Here i'll try to select the best sets that we can get.
+
+
+```{r}
+host_results <- list()
+ipvsiv_results <- list()
+resistance_results <- list()
+stage_results <- list()
+virus_results <- list()
+```
+
+### PRJNA261444
+
+Generally i'll test for susceptible vs resistance host differences.
+If the have significantly different responses, i'll keep them separate.
+
+```{r}
+bpr <- "PRJNA261444"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+Because the resistant and susceptible cultivars are so similar, i won't distinguish between them for the marginal analysis of IPvsIV and infection stage.
+In this case, because we have multiple time-points for the IV samples, i can do a two factor design.
+
+```{r}
+bpr <- "PRJNA261444"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname + hpi, kind = "host")
+```
+
+```{r}
+bpr <- "PRJNA261444"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage)) %>% mutate(infection_stage = factor(gsub("Res$", "", infection_stage)))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage + resistance, kind = "infection_stage")
+```
+
+```{r}
+bpr <- "PRJNA261444"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp)) %>% mutate(ipvsivtp = factor(gsub("Res$", "", ipvsivtp)))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+
+
+### PRJNA327437
+
+```{r}
+bpr <- "PRJNA327437"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+Here the factors of interest are IP vs IV, and 6 time points.
+
+
+Because we don't have multiple timepoints for the invitro samples, we can't actually do a full marginal estimate.
+The problem is that if we ignore the hpi, the variance will look very high and we'll only pick up things that are DE in all samples.
+I think the best option will probably be to pick a "representative" time-point that's comparable across experiments?
+
+```{r}
+tmp <- lcounts %>% filter(host_tidyname == "Bnap") %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = cpm) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+pca_raw <- princomp(tmp, fix_sign = TRUE)
+rm(tmp)
+
+prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev[1:10])) * 100) %>%
+  data.frame(variance_explained = .) %>%
+  rownames_to_column("PC") %>%
+  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
+
+print(ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity"))
+
+pca <- as.data.frame(pca_raw$loadings[, 1:3])
+colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
+pca <- pca %>% rownames_to_column("sra")
+pca <- right_join(meta %>% select(bioproject, sra, hpi), pca, by = "sra") %>%
+  tidyr::pivot_longer(-c(bioproject, sra, hpi), names_to = "PC")
+
+gg <- ggplot(pca, aes(x=hpi, y=value, color=bioproject)) +
+  geom_point(alpha = 0.7, size = 3) +
+  facet_grid(cols = vars(PC))
+
+print(gg)
+```
+
+Actually, it's pretty unclear what's "representative".
+I think i'll just need to stick with processing inplanta vs invitro at each of our defined stages.
+I think it's reasonable to pool some close time-points, and then at the end we can decide which of the three infection stages is most useful (probably mid or late though). 
+
+```{r}
+bpr <- "PRJNA327437"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+```{r}
+bpr <- "PRJNA327437"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+```{r}
+bpr <- "PRJNA327437"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage)) %>% mutate(infection_stage = factor(gsub("Res$", "", infection_stage)))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+
+### PRJNA341340
+
+```{r}
+bpr <- "PRJNA341340"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA341340"
+this_meta <- meta %>% filter(bioproject == bpr, tissue != "sclerotia")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+### PRJNA418121
+
+```{r}
+bpr <- "PRJNA418121"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+bpr <- "PRJNA418121"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+
+### PRJNA471709
+
+
+```{r}
+bpr <- "PRJNA471709"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+bpr <- "PRJNA471709"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+There are enough differences in here between resistant and susceptible that I want to keep them separate.
+
+
+
+```{r}
+bpr <- "PRJNA471709"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+
+### PRJNA477716
+
+```{r}
+bpr <- "PRJNA477716"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, host_accession_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+bpr <- "PRJNA477716"
+this_meta <- meta %>% filter(bioproject == bpr, host_accession_tidyname != "PDB", host_accession_tidyname != "MM")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+
+### PRJNA501892
+
+```{r}
+bpr <- "PRJNA501892"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+bpr <- "PRJNA501892"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+I think probably I should keep them separate.
+
+
+```{r}
+bpr <- "PRJNA501892"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+```{r}
+bpr <- "PRJNA501892"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+```{r}
+bpr <- "PRJNA501892"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+
+
+### PRJNA574280
+
+
+```{r}
+bpr <- "PRJNA574280"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA574280"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+
+
+### PRJNA577619
+
+
+```{r}
+bpr <- "PRJNA577619"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA577619"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus + hpi, kind = "virus")
+```
+
+
+### PRJNA593737
+
+
+```{r}
+bpr <- "PRJNA593737"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA593737"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus), !sample %in% c("PRJNA593737_SsclZ11OXSsNSRV1_colony_IVPDA", "PRJNA593737_SsclZ113OXSsNSRV1_colony_IVPDA"))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus, kind = "virus")
+```
+
+
+
+### PRJNA641217
+
+
+
+```{r}
+bpr <- "PRJNA641217"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA641217"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus + host_tidyname, kind = "virus")
+```
+
+
+
+### PRJNA641462
+
+
+```{r}
+bpr <- "PRJNA641462"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+bpr <- "PRJNA641462"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus, kind = "virus")
+```
+
+
+
+### PRJNA643804
+
+
+```{r}
+bpr <- "PRJNA643804"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA643804"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus, kind = "virus")
+```
+
+
+
+
+
+### PRJNA670487
+
+
+
+
+```{r}
+bpr <- "PRJNA670487"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA670487"
+this_meta <- meta %>% filter(bioproject == bpr, sample != "PRJNA670487_Sscl1980_ball_IVPDB")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+### PRJNA687280
+
+
+
+```{r}
+bpr <- "PRJNA687280"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA687280"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+The PCA plot shows that the time-points have a much larger impact than the resistance or susceptibily.
+But there are a few hundred DGEs, so i'll keep them separate.
+
+```{r}
+bpr <- "PRJNA687280"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+```{r}
+bpr <- "PRJNA687280"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+```{r}
+bpr <- "PRJNA687280"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+
+
+
+
+
+
+
+
+### PRJNA695466
+
+
+
+
+```{r}
+bpr <- "PRJNA695466"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA695466"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(virus))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_virus_contrast_mat(this_meta)
+
+virus_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ virus, kind = "virus")
+```
+
+
+
+### PRJNA706136
+
+
+
+```{r}
+bpr <- "PRJNA706136"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+
+```{r}
+bpr <- "PRJNA706136"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+
+
+
+
+### PRJNA735329
+
+
+```{r}
+bpr <- "PRJNA735329"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+```{r}
+# CHECK
+
+bpr <- "PRJNA735329"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+
+### PRJNA766564
+
+
+
+
+```{r}
+bpr <- "PRJNA766564"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA766564"
+this_meta <- meta %>% filter(bioproject == bpr, sample != "PRJNA766564_Sscl_lesion_Bnap1703_stem_24hpi") %>% mutate(resistance = ifelse(is.na(resistance), "Susc", "Res"))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+There's so little difference between resistance and susceptible that we won't worry about it.
+
+```{r}
+bpr <- "PRJNA766564"
+this_meta <- meta %>%
+  filter(bioproject == bpr, !is.na(infection_stage), sample != "PRJNA766564_Sscl_lesion_Bnap1703_stem_24hpi") %>%
+  mutate(infection_stage = factor(gsub("Res$", "", infection_stage))) %>%
+  mutate(resistance = ifelse(is.na(resistance), "Susc", "Res"))
+
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage + resistance, kind = "infection_stage")
+```
+
+
+
+### PRJNA777355
+
+
+```{r}
+bpr <- "PRJNA777355"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA777355"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+```{r}
+bpr <- "PRJNA777355"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(infection_stage))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_timepoint_contrast_mat(this_meta)
+
+stage_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ infection_stage, kind = "infection_stage")
+```
+
+
+```{r}
+bpr <- "PRJNA777355"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+
+
+
+### PRJNA789389
+
+
+```{r}
+bpr <- "PRJNA789389"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+
+```{r}
+bpr <- "PRJNA789389"
+# Had to exclude sample, only one rep
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance), sample != "PRJNA789389_SsclNB5_lesion_GmaxACColibri_leaf_4hpi")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance + hpi, kind = "resistance")
+```
+
+```{r}
+bpr <- "PRJNA789389"
+this_meta <- meta %>% filter(bioproject == bpr)
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
+
+```{r}
+bpr <- "PRJNA789389"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(ipvsivtp)) %>% mutate(ipvsivtp = factor(gsub("Res$", "", ipvsivtp)))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_ipvsivtp_contrast_mat(this_meta)
+
+ipvsiv_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ ipvsivtp, kind = "ipvsivtp")
+```
+
+
+
+
+### PRJNA804213
+
+```{r}
+bpr <- "PRJNA804213"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA804213"
+this_meta <- meta %>% filter(bioproject == bpr, !is.na(resistance))
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_resistance_contrast_mat(this_meta)
+
+resistance_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ resistance, kind = "resistance")
+```
+
+
+
+### PRJNA830457
+
+```{r}
+bpr <- "PRJNA830457"
+meta %>% filter(bioproject == bpr) %>% select(bioproject, sra, sample, host_tidyname, hpi, infection_stage, resistance, virus, ipvsivtp)
+```
+
+
+```{r}
+bpr <- "PRJNA830457"
+this_meta <- meta %>% filter(bioproject == bpr, sample != "PRJNA830457_Sscl_periphery_BnapResynthesized_leaf_24hpi")
+this_lcounts <- lcounts %>% filter(sra %in% this_meta[["sra"]])
+contrasts <- process_host_contrast_mat(this_meta)
+
+host_results[[bpr]] <- run_deg_tests(this_lcounts, this_meta, contrasts, design = ~ host_tidyname, kind = "host")
+```
+
 
 Yay!
 They're all done.
@@ -1352,454 +2215,106 @@ Now I need to combine the results and turn it into something we can use for the 
 
 
 ```{r}
-contrasts <- do.call(rbind, all_contrasts)
-row.names(contrasts) <- NULL
-
-deg_results_ <- do.call(rbind, lapply(
-  names(deg_results),
-  FUN = function(n) {
-    as.data.frame(deg_results[[n]]) %>% rownames_to_column("geneid") %>% mutate(contrast = n)    
-  }
-))
-row.names(deg_results_) <- NULL
-
-deg_results_ <- left_join(
-  deg_results_ %>% unique(),
-  contrasts %>% unique(),
-  by = "contrast"
-) %>% unique()
-
-deg_results_ <- deg_results_[
-  order(deg_results_$contrast_group, deg_results_$bioproject, deg_results_$contrast, deg_results_$geneid),
-  c('contrast', 'contrast_group', 'bioproject', 'sample1', 'sample2', 'host1', 'hpi1', 'host2', 'hpi2', 'geneid', 'baseMean', 'log2FoldChange', 'lfcSE', 'stat', 'pvalue', 'padj')
-]
-
-readr::write_tsv(deg_results_, "output/dge_tests.tsv", na = "-")
-head(deg_results_)
-```
-
-Ok. thats the DGE tests done.
-Now the counts.
-
-```{r}
-norm_counts_ <- do.call(cbind, norm_counts)
-
-
-lcounts <- left_join(
-  lcounts,
-  as.data.frame(norm_counts_) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "disp_norm_count"),
-  by = c("sra", "id")
-)
-
-norm_counts_[1:5, 1:5]
-dim(norm_counts_)
-```
-
-That was easy.
-Let's look again at the PCA plots.
-
-```{r}
-pca_raw <- princomp(norm_counts_, fix_sign = TRUE)
-
-prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
-  data.frame(variance_explained = .) %>%
-  rownames_to_column("PC") %>%
-  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
-
-print(prop_var)
-ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
+host_results_df <- do.call(rbind, host_results)
+head(host_results_df)
 ```
 
 ```{r}
-pca <- as.data.frame(pca_raw$loadings[, 1:10])
-colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
-pca <- pca %>% rownames_to_column("sra")
-pca <- right_join(meta, pca, by = "sra")
-head(pca)
-```
-
-
-```{r, fig.width = 10, fig.height = 10}
-gg1 <- pca %>%
-  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
-  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
-  full_join(., ., by=c("sra", "host", "bioproject")) %>%
-  unique() %>%
-  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
-  geom_point(size = 2, alpha = 0.6) +
-  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
-  theme(aspect.ratio = 1)
-
-gg1 <- gg_shape(gg1, pca$host)
-
-gg2 <- pca %>%
-  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
-  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
-  full_join(., ., by=c("sra", "host", "bioproject")) %>%
-  unique() %>%
-  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
-  geom_point(size = 2, alpha = 0.6) +
-  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
-  theme(aspect.ratio = 1)
-
-gg2 <- gg_shape(gg2, pca$bioproject)
-library(cowplot)
-
-gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
-ggsave("output/deseq_norm_pca.svg", gg, height = 10, width = 10)
-gg
-```
-
-
-It's a bit less crazy, which I like.
-I think there's some nice clustering of hosts in there, so it seems like it should be possible to pull interesting things from this.
-
-So in an ideal world, you'd have most of the variation explained by factors of interest.
-I do see a general clustering of samples from the same bioprojects.
-But there also tend to be similar treatments within each bioproject, so it's difficult to tell.
-
-We'll have to see.
-Maybe I can remove some of these effects.
-I was planning to [SVA](https://academic.oup.com/nargab/article/2/3/lqaa078/5909519) to do this, but it seems like it can't handle the DESeq2 counts shrunk counts.
-So i'll run ComBat_seq on the raw data and redo the rlog shrinkage.
-Unfortunately, i can't seem to include any of the covariates of interest in the ComBat model as they're all confounded with the BioProject.
-So we'll have to see if it removes any factors of interest.
-
-
-```{r}
-batch <- setNames(meta[["bioproject"]], meta[["sra"]])[colnames(norm_counts_)]
-tmp <- as.data.frame(column_to_rownames(meta, "sra")[colnames(norm_counts_), ])
-tmp[is.na(tmp)] <- "NA"
-
-tmp_counts <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = count) %>%
+test <- host_results_df %>% mutate(dge = padj < 0.01) %>% filter(host2 == "IV") %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
   column_to_rownames("id") %>%
   as.matrix()
 
-mm <- model.matrix(~as.factor(sample), data=tmp)
-
-# Paper says that applying shrinkage at this point is unnecessary.
-combat_edata <- ComBat_seq(
-  tmp_counts,
-  batch=batch,
-  group=NULL,
-  shrink.disp = FALSE,
-  shrink = FALSE
-)
-combat_edata[1:5, 1:5]
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
 ```
 
 ```{r}
-lcounts <- left_join(
-  lcounts,
-  as.data.frame(combat_edata) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "batch_norm_count"),
-  by = c("sra", "id")
-)
-head(lcounts)
-```
-
-Ok. So we've done the batch correction, now we do the DESeq correction again.
-
-
-```{r, fig.height = 10, fig.width = 10}
-run_count_norms2 <- function(lcounts, bpr) {
-  this_counts <- lcounts %>% filter(bioproject == bpr)  %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = batch_norm_count) %>%
-    column_to_rownames("id") %>%
-    as.matrix()
-  
-  all(rownames(this_meta) == colnames(this_counts))
-  this_meta_ <- this_meta %>% column_to_rownames("sra") %>% mutate(sample = factor(sample)) %>% .[colnames(this_counts), ]
-  
-  dds <- DESeqDataSetFromMatrix(
-    countData = this_counts,
-    colData = this_meta_,
-    design = ~ 1
-  )
-  
-  ncounts <- assay(rlog(dds, blind = TRUE))
-  print(plotPCA(rlog(dds, blind = FALSE), intgroup = "sample"))
-  
-  return(ncounts)
-}
-
-norm_counts <- list()
-
-for (bpr in unique(meta$bioproject)) {
-  this_meta <- meta %>% filter(bioproject == bpr)
-  norm_counts[[bpr]] <- run_count_norms2(lcounts, bpr)
-}
-
-norm_counts_ <- do.call(cbind, norm_counts)
-
-lcounts <- left_join(
-  lcounts,
-  as.data.frame(norm_counts_) %>% rownames_to_column("id") %>% tidyr::pivot_longer(-id, names_to = "sra", values_to = "norm_count"),
-  by = c("sra", "id")
-)
-
-norm_counts_[1:5, 1:5]
-dim(norm_counts_)
-```
-
-The per bioproject PCA plots look very similar to the others, though it's difficult to compare them scrolling up and down.
-Now let's look at the whole PCA.
-
-```{r}
-tmp_counts <- apply(norm_counts_, MARGIN = 2, FUN = scale)
-rownames(tmp_counts) <- rownames(norm_counts_)
-colnames(tmp_counts) <- colnames(norm_counts_)
-
-tmp_counts[is.na(tmp_counts)] <- 0
-pca_raw <- princomp(tmp_counts, fix_sign = TRUE)
-
-prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
-  data.frame(variance_explained = .) %>%
-  rownames_to_column("PC") %>%
-  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
-
-print(prop_var)
-ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
-```
-
-We've jumped from the first PC explaining ~23% of the variance to ~27%.
-It's not much of a difference.
-
-
-```{r}
-pca <- as.data.frame(pca_raw$loadings[, 1:10])
-colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
-pca <- pca %>% rownames_to_column("sra")
-pca <- right_join(meta %>% select(sra, host_tidyname, bioproject), pca, by = "sra")
-```
-
-```{r, fig.width = 10, fig.height = 10}
-gg1 <- pca %>%
-  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
-  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
-  full_join(., ., by=c("sra", "host", "bioproject")) %>%
-  unique() %>%
-  ggplot(aes(x=value.x, y=value.y, colour = host, shape = host)) +
-  geom_point(size = 2, alpha = 0.6) +
-  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
-  theme(aspect.ratio = 1)
-
-gg1 <- gg_shape(gg1, pca$host)
-
-gg2 <- pca %>%
-  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
-  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
-  full_join(., ., by=c("sra", "host", "bioproject")) %>%
-  unique() %>%
-  ggplot(aes(x=value.x, y=value.y, colour = bioproject, shape = bioproject)) +
-  geom_point(size = 2, alpha = 0.6) +
-  facet_grid(rows = vars(name.y), cols = vars(name.x), scales = "free") +
-  theme(aspect.ratio = 1)
-
-gg2 <- gg_shape(gg2, pca$bioproject)
-library(cowplot)
-
-gg <- plot_grid(gg1, gg2, ncol = 1, align = "hv")
-ggsave("output/combat_norm_pca.svg", gg, height = 10, width = 10)
-gg
-```
-
-
-```{r, fig.width = 5, fig.height = 3.5}
-gg3 <- pca %>%
-  select(sra, host = host_tidyname, bioproject, PC01, PC02, PC03) %>%
-  tidyr::pivot_longer(cols = c(PC01, PC02, PC03)) %>%
-  unique() %>%
-  ggplot(aes(x=value)) +
-  geom_histogram(fill = "black") +
-  facet_grid(cols = vars(name), scales = "free")
-
-print(gg3)
-```
-
-
-Yeah i do think that the PCs are maybe a bit tidier.
-I definitely still see groupings of samples from the same bioproject, but probably it's unavoidable.
-Maybe i'll look at correlation matrices.
-
-Here's the one from the ComBat normalised counts.
-
-```{r, fig.width=12.409344, fig.height=8.906201}
-tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = norm_count) %>%
+test <- host_results_df %>% mutate(dge = padj < 0.01) %>% filter(host2 != "IV") %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
   column_to_rownames("id") %>%
   as.matrix()
 
-meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
-tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
-
-tmp_cor <- cor(tmp)
-#tmp_dist <- as.dist(1 - tmp_cor)
-#hcl <- hclust(tmp_dist, method = "average")
-
-#srrs <- colnames(tmp)[hcl$order]
-ha <- HeatmapAnnotation(
-  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
-  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
-)
-
-ht <- Heatmap(
-  tmp_cor,
-  name = "samples",
-  cluster_rows = FALSE,
-  cluster_columns = FALSE,
-  show_column_dend = FALSE,
-  show_column_names = FALSE,
-  show_row_names = FALSE,
-  top_annotation = ha,
-  height=nrow(tmp_cor) * unit(0.5, "mm"),
-  width=ncol(tmp_cor) * unit(0.5, "mm")
-)
-
-htsize <- calc_ht_size(ht)
-htsize
-
-pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
-ht
-dev.off()
-
-draw(ht)
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
 ```
-Well the clusters in here certainly make more sense than from the raw data.
-I've looked at the data, and i don't think a log transformation is necessary.
 
-And here's the one from the dispersion normalised counts (i.e. DESeq but no ComBat).
 
-```{r, fig.width=12.409344, fig.height=8.906201}
-tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+```{r}
+ipvsiv_results_df <- do.call(rbind, ipvsiv_results)
+head(ipvsiv_results_df)
+```
+
+```{r}
+test <- ipvsiv_results_df %>% mutate(dge = padj < 0.01) %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
   column_to_rownames("id") %>%
   as.matrix()
 
-meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
-tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
-
-tmp_cor <- cor(tmp)
-#tmp_dist <- as.dist(1 - tmp_cor)
-#hcl <- hclust(tmp_dist, method = "average")
-
-#srrs <- colnames(tmp)[hcl$order]
-ha <- HeatmapAnnotation(
-  bioproject = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "bioproject"],
-  host = meta %>% column_to_rownames("sra") %>% .[colnames(tmp), "host"]
-)
-
-ht <- Heatmap(
-  tmp_cor,
-  name = "samples",
-  cluster_rows = FALSE,
-  cluster_columns = FALSE,
-  show_column_dend = FALSE,
-  show_column_names = FALSE,
-  show_row_names = FALSE,
-  top_annotation = ha,
-  height=nrow(tmp_cor) * unit(0.5, "mm"),
-  width=ncol(tmp_cor) * unit(0.5, "mm")
-)
-
-htsize <- calc_ht_size(ht)
-htsize
-
-pdf("output/06-samples_correlation_host_normed.pdf", width = htsize[1], height = htsize[2])
-ht
-dev.off()
-
-draw(ht)
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
 ```
 
-These look almost identical.
-I think that because the extra amount of variance explained is relatively low, and the results look fairly similar, i won't continue with the ComBat normalised counts.
-There's a risk that removing the bioproject effect might remove some information about treatments (esp because I wasn't able to provide info about treatments).
-The benefits don't seem to outweigh the risks.
-
-I'd like to see what we can do with gene level correlation.
-Do the gene expression values look ok?
+```{r}
+resistance_results_df <- do.call(rbind, resistance_results)
+head(resistance_results_df)
+```
 
 ```{r}
-tmp <- lcounts %>% tidyr::pivot_wider(id_cols = c(id), names_from = sra, values_from = disp_norm_count) %>%
+test <- resistance_results_df %>% mutate(dge = padj < 0.01) %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
   column_to_rownames("id") %>%
   as.matrix()
 
-meta_tmp <- meta[order(meta$host, meta$host_accession, meta$hpi, meta$tissue, meta$accession, meta$plant_tissue, meta$treatment),]
-tmp <- tmp[, meta_tmp$sra[meta_tmp$sra %in% colnames(tmp)]]
-
-# There are two genes with no counts in any samples.
-# We need to exclude them for the correlation to work.
-# Causes error about stddev == 0.
-tmp_cor_disp <- cor(t(tmp[(rowSums(tmp) > 0), ]))
-
-quantile(tmp_cor_disp)
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
 ```
-
-Yeah that seems like a reasonable range of values.
-I think probably the number of genes with mid correlation (~0.5-0.8) is caused by genes with relatively low variation across treatments.
-I suspect that once we remove those genes we'll see cleaner differences.
-
-```{r}
-pca_raw <- prcomp(t(tmp), retx = TRUE)
-
-prop_var <- ((pca_raw$sdev[1:10] / sum(pca_raw$sdev)) * 100) %>%
-  data.frame(variance_explained = .) %>%
-  rownames_to_column("PC") %>%
-  mutate(PC = paste0("PC", sprintf("%02d", 1:n())))
-
-print(prop_var)
-ggplot(prop_var, aes(x=PC, y=variance_explained)) + geom_bar(stat = "identity")
-```
-
-```{r, fig.width = 4.75, fig.height = 3.5}
-pca <- as.data.frame(pca_raw$rotation[, 1:10])
-colnames(pca) <- paste0("PC", sprintf("%02d", seq_len(ncol(pca))))
-pca <- pca %>% rownames_to_column("id")
-
-gg <- ggplot(pca, aes(x=PC01, y=PC02)) +
-  geom_point(alpha = 0.7, size = 3)
-
-print(gg)
-
-gg <- ggplot(pca, aes(x=PC03, y=PC04)) +
-  geom_point(alpha = 0.7, size = 3)
-
-gg
-```
-
-I guess the values look fine.
-It's a bit hard to say but there aren't like crazy clusters or massive outliers.
-
-We'll continue with the dispersion corrected counts.
-I just want to check though whether there are mean differences left in the data.
-
-```{r, fig.height=20, fig.width = 20}
-ggplot(lcounts, aes(x = sra, y = disp_norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
-```
-
-I do see differences in mean and scale between bioprojects.
-They're pretty similar in terms of the range, but it might be a problem later if we do anything other than correlation clustering.
-How are the ComBat counts?
-
-```{r, fig.height=20, fig.width = 20}
-ggplot(lcounts, aes(x = sra, y = norm_count, colour = bioproject)) + geom_boxplot()  + facet_wrap(vars(bioproject), scales = "free_x")
-```
-
-I seems like the main contribution here is that some of the crazy outliers in PRJNA670487 are squished.
-Otherwise the counts have pretty similar ranges.
-
-I think _maybe_ i'm coming back around to ComBat just for the sake of shrinking the outliers?
-
-I'm just going to save them both and we can decide later :)
 
 
 ```{r}
-lcounts %>%
-  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = disp_norm_count) %>%
-  readr::write_tsv("output/feature_counts_deseq2_normed.tsv", na = "-")
+stage_results_df <- do.call(rbind, stage_results)
+head(stage_results_df)
 ```
 
 ```{r}
-lcounts %>%
-  tidyr::pivot_wider(id_cols = id, names_from = sra, values_from = norm_count) %>%
-  readr::write_tsv("output/feature_counts_combat_normed.tsv", na = "-")
+test <- stage_results_df %>% mutate(dge = padj < 0.01) %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
 ```
+
+
+```{r}
+virus_results_df <- do.call(rbind, virus_results)
+head(virus_results_df)
+```
+
+
+```{r}
+test <- virus_results_df %>% mutate(dge = padj < 0.01) %>% tidyr::pivot_wider(id_cols = id, names_from = contrast, values_from = dge) %>%
+  column_to_rownames("id") %>%
+  as.matrix()
+
+test[is.na(test)] <- FALSE
+test <- test[!apply(test, MARGIN = 1, FUN = all), ]
+test <- test[rowMeans(1.0 * test) > 0.1, ]
+heatmap(1.0 * test, scale = "none")
+```
+
+
+
+```{r}
+all_results <- list("ipvsiv" = ipvsiv_results_df, "infection_stage" = stage_results_df, "host" = host_results_df, "resistance" = resistance_results_df, "virus" = virus_results_df)
+writexl::write_xlsx(all_results, "output/dge_tests.xlsx")
+```
+
 
 BYEEE!

@@ -21,6 +21,7 @@
 *.stdout
 *.nextflow.log*
 *.sif
+*.tar.gz
 .RData
 .Rhistory
 slurm*.out
@@ -35,6 +36,8 @@ slurm*.out
 **/backup
 **/output
 **/work
+
+**/.ipynb_checkpoints
 
 **/jbrowse2/asset-manifest.json
 **/jbrowse2/favicon.ico
@@ -53,6 +56,8 @@ slurm*.out
 01-genome_functional_annotation/results
 01-genome_functional_annotation/gffpal_env
 01-genome_functional_annotation/tmbed_condaenv
+01-genome_functional_annotation/caretta_condaenv
+
 
 !jbrowse2/config.json
 !input/reference_genome/*
